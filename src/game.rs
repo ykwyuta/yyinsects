@@ -115,6 +115,8 @@ enum Act {
     /// レーダーの光る場所のうち、いちばん近いところへ
     RadarGo,
     GuideTab(usize),
+    /// 図鑑の成虫／冬越しの姿の切り替え
+    GuideStage(bool),
     Light,
     Lens(i32),
     /// 地図の拡大・縮小
@@ -236,6 +238,8 @@ pub struct Game {
     entry_book: Option<EntryBook>,
     /// 図鑑で開いているなかま（タブ）
     guide_group: usize,
+    /// 図鑑で冬越しの姿（たまご・幼虫・さなぎ）を見ている
+    guide_stage: bool,
     /// レーダーで探している図鑑の項目
     radar: Option<usize>,
     /// 会えるスポットの場所（経緯度）
@@ -266,6 +270,15 @@ fn mix4(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
 fn group_tabs(width: f32) -> (usize, usize, f32) {
     let cols = ((width / 150.0).floor() as usize).clamp(1, GROUPS.len());
     (cols, GROUPS.len().div_ceil(cols), width / cols as f32)
+}
+
+/// 写真のカードの名前（冬越しの姿なら「カブトムシの幼虫」）
+fn photo_name(p: &PhotoCard, e: usize) -> String {
+    match p.stages.iter().find(|s| s.0 == e) {
+        Some((_, Stage::Adult)) => tf!("{}（冬ごし中の成虫）", "{} (overwintering adult)", "{}（越冬的成虫）", entry_name(e)),
+        Some(_) => stage_name(e),
+        None => entry_name(e).to_string(),
+    }
 }
 
 fn entry_name(e: usize) -> &'static str {
@@ -358,6 +371,7 @@ impl Game {
             entry_page: 0,
             entry_book: None,
             guide_group: 0,
+            guide_stage: false,
             radar: None,
             radar_cells: Vec::new(),
             radar_key: None,
@@ -601,7 +615,7 @@ impl Game {
         if let Some(p) = &self.photo {
             if let Some(&(e, _, fresh, _)) = p.lines.get(p.index) {
                 return tf!("{}。{}。下のボタンで次へ進もう。", "{}. {}. Press the button below to continue.", "{}。{}。按下方按钮继续。",
-                    if fresh { t!("新発見", "New discovery", "新发现") } else { t!("撮影成功", "Photo taken", "拍摄成功") }, entry_name(e));
+                    if fresh { t!("新発見", "New discovery", "新发现") } else { t!("撮影成功", "Photo taken", "拍摄成功") }, photo_name(p, e));
             }
             return p.advice.unwrap_or("").to_string();
         }
@@ -1219,6 +1233,15 @@ impl Game {
                     self.goto(Target::Sp(e));
                 }
             }
+            Act::GuideStage(on) => {
+                self.guide_stage = on;
+                self.guide_scroll = 0.0;
+                if on {
+                    for e in 0..n_entries() {
+                        self.prog.stage_fresh[e] = false;
+                    }
+                }
+            }
             Act::GuideTab(i) => {
                 let g = i.min(GROUPS.len() - 1);
                 if g != self.guide_group {
@@ -1365,9 +1388,12 @@ impl Game {
 
     /// 宿題の対象のところへ行く（スポットと場面）
     fn goto(&mut self, tg: Target) {
-        let Target::Sp(i) = tg;
+        let i = tg.entry();
         let near = map_to_lonlat(self.cap.0, self.cap.1);
-        let (s, h, m) = where_is(i, near, self.prog.month);
+        let (s, h, m) = match tg {
+            Target::Sp(_) => where_is(i, near, self.prog.month),
+            Target::Stage(_) => where_is_stage(i, near, self.prog.month),
+        };
         self.fly_to_spot(s, Some(h));
         if m != self.prog.month {
             self.set_month(m);
@@ -1457,7 +1483,9 @@ impl Game {
             if st == 0 {
                 continue;
             }
-            let (new, better) = self.prog.record(e, st);
+            // たまご・幼虫・さなぎは、成虫とは別に収録する
+            let young = stages.iter().any(|&(sp, st)| sp == e && st != Stage::Adult);
+            let (new, better) = if young { self.prog.record_stage(e) } else { self.prog.record(e, st) };
             lines.push((e, st, new, better));
         }
         lines.sort_by(|a, b| b.1.cmp(&a.1));
@@ -2049,7 +2077,7 @@ impl Game {
             self.add_button(x - bw, 6.0, x, 6.0 + bh, label, act, true, false);
             x -= bw + 6.0;
         }
-        let fresh = self.prog.fresh.iter().filter(|&&f| f).count();
+        let fresh = self.prog.fresh.iter().chain(self.prog.stage_fresh.iter()).filter(|&&f| f).count();
         let gl = if fresh > 0 { tf!("図鑑 {}/{} ●", "Guide {}/{} ●", "图鉴 {}/{} ●", self.prog.found(), n_entries()) } else { tf!("図鑑 {}/{}", "Guide {}/{}", "图鉴 {}/{}", self.prog.found(), n_entries()) };
         let gw = if self.compact() { 110.0 } else { 130.0 };
         self.add_button(x - gw, 6.0, x, 6.0 + bh, &gl, Act::Guide, true, fresh > 0);
@@ -2082,7 +2110,7 @@ impl Game {
         let mi = self.prog.mission;
         let m = &MISSIONS[mi];
         let targets = m.target_list();
-        let done_n = targets.iter().filter(|&&(t, n)| self.prog.stars[t.entry()] >= n).count();
+        let done_n = targets.iter().filter(|&&(t, _)| self.prog.has(t)).count();
         let passed = self.prog.is_done(mi);
         let head = if passed {
             tf!("✔ 宿題{} {}", "✔ Task {} {}", "✔ 作业{} {}", mi + 1, m.title.get())
@@ -2102,10 +2130,13 @@ impl Game {
         let mut y = y0 + 38.0;
         let present: Vec<usize> = self.scene.as_ref().map(|s| s.present.clone()).unwrap_or_default();
         for &(tg, need) in &targets {
-            let have = self.prog.stars[tg.entry()];
-            let ok = have >= need;
+            let ok = self.prog.has(tg);
             let mark = if ok { "✔" } else { "○" };
-            let here = matches!(tg, Target::Sp(i) if present.contains(&i)) && !ok;
+            let month = self.prog.month;
+            let here = match tg {
+                Target::Sp(i) => present.contains(&i) && SPECIES[i].in_season(month),
+                Target::Stage(i) => present.contains(&i) && !SPECIES[i].in_season(month),
+            } && !ok;
             let col = if ok { GOOD } else if here { GOLD } else { TEXT };
             let _ = need;
             let need_s = String::new();
@@ -2136,10 +2167,10 @@ impl Game {
         let mut marks: Vec<(f32, f32)> = Vec::new();
         if !self.prog.all_clear() {
             let m = &MISSIONS[self.prog.mission];
-            for &(tg, need) in &m.target_list() {
+            for &(tg, _) in &m.target_list() {
                 {
-                    let Target::Sp(i) = tg;
-                    if self.prog.stars[i] >= need {
+                    let i = tg.entry();
+                    if self.prog.has(tg) || (matches!(tg, Target::Stage(_)) == SPECIES[i].in_season(sc.month)) {
                         continue;
                     }
                     let mut best: Option<(f32, f32, f32)> = None;
@@ -2280,7 +2311,7 @@ impl Game {
 
     /// いま図鑑で開いているなかまの項目
     fn guide_entries(&self) -> Vec<usize> {
-        (0..n_entries()).filter(|&e| entry_group(e) == GROUPS[self.guide_group]).collect()
+        (0..n_entries()).filter(|&e| entry_group(e) == GROUPS[self.guide_group] && (!self.guide_stage || has_stage(e))).collect()
     }
 
     fn render_guide_gl(&mut self) {
@@ -2298,19 +2329,31 @@ impl Game {
             if cy0 + ch < y0 - 4.0 || cy0 > y1 {
                 continue;
             }
-            let found = self.prog.stars[e] > 0;
+            let found = if self.guide_stage { self.prog.stage_stars[e] > 0 } else { self.prog.stars[e] > 0 };
             let hover = self.mouse.0 >= cx0 && self.mouse.0 <= cx0 + cw && self.mouse.1 >= cy0 && self.mouse.1 <= cy0 + ch && !self.touch;
             let bg = if found { [0.10, 0.26, 0.34, 1.0] } else { [0.06, 0.12, 0.17, 1.0] };
             let bg = if hover { mix4(bg, [0.3, 0.5, 0.55, 1.0], 0.3) } else { bg };
             self.gfx.rect(cx0, cy0, cx0 + cw, cy0 + ch, bg);
             self.gfx.rect_outline(cx0, cy0, cx0 + cw, cy0 + ch, 1.0, if found { [0.45, 0.85, 0.80, 0.7] } else { [0.3, 0.4, 0.45, 0.6] });
             let a = if found { 1.0 } else { 0.16 };
-            self.draw_entry_art(e, cx0 + 6.0, cy0 + 6.0, cx0 + cw - 6.0, cy0 + ch - 28.0, a);
+            if self.guide_stage {
+                self.draw_stage_art(e, cx0 + 6.0, cy0 + 6.0, cx0 + cw - 6.0, cy0 + ch - 28.0, a);
+            } else {
+                self.draw_entry_art(e, cx0 + 6.0, cy0 + 6.0, cx0 + cw - 6.0, cy0 + ch - 28.0, a);
+            }
             self.gfx.flush();
         }
         // 上下の余白を塗って、スクロールした項目を隠す
         self.gfx.rect(0.0, 0.0, w, y0 - 2.0, [0.02, 0.07, 0.11, 1.0]);
         self.gfx.rect(0.0, y1 + 2.0, w, h, [0.02, 0.07, 0.11, 1.0]);
+    }
+
+    /// 冬越しの姿の絵を枠の中に描く
+    fn draw_stage_art(&mut self, e: usize, x0: f32, y0: f32, x1: f32, y1: f32, a: f32) {
+        let Some((stage, _)) = SPECIES[e].winter() else { return };
+        let (ew, eh) = art::stage_extent(e, stage);
+        let len = ((x1 - x0) * 0.8 / ew).min((y1 - y0) * 0.8 / eh);
+        art::draw_stage(&mut self.gfx, e, stage, (x0 + x1) * 0.5, (y0 + y1) * 0.5, len, 1.0, 0.0, self.clock, a, 7);
     }
 
     /// 図鑑の絵を枠の中に描く
@@ -2328,8 +2371,13 @@ impl Game {
     fn render_guide_ui(&mut self) {
         let w = self.w();
         let (x0, y0, _x1, y1, cols, cw, ch) = self.guide_layout();
-        let title = tf!("関東の昆虫図鑑　{}/{}", "Kanto insect guide  {}/{}", "关东昆虫图鉴　{}/{}", self.prog.found(), n_entries());
-        self.gfx.text(&title, 24.0, self.top_h() + 12.0, w - 160.0, 30.0, Font::Big, TEXT);
+        let n_stage = (0..n_entries()).filter(|&e| has_stage(e)).count();
+        let title = tf!("関東の昆虫図鑑　成虫 {}/{}・冬越しの姿 {}/{}", "Kanto insect guide  Adults {}/{} · Winter forms {}/{}", "关东昆虫图鉴　成虫 {}/{}·越冬形态 {}/{}", self.prog.found(), n_entries(), self.prog.stages_found(), n_stage);
+        self.gfx.text(&title, 24.0, self.top_h() + 12.0, w - 520.0, 30.0, Font::Big, TEXT);
+        let sf = (0..n_entries()).any(|e| self.prog.stage_fresh[e]);
+        let stage_label = if sf { t!("たまご・幼虫・さなぎ ●", "Eggs, larvae & pupae ●", "卵·幼虫·蛹 ●") } else { t!("たまご・幼虫・さなぎ", "Eggs, larvae & pupae", "卵·幼虫·蛹") };
+        self.add_button(w - 500.0, self.top_h() + 10.0, w - 400.0, self.top_h() + 44.0, t!("成虫", "Adults", "成虫"), Act::GuideStage(false), true, !self.guide_stage);
+        self.add_button(w - 394.0, self.top_h() + 10.0, w - 130.0, self.top_h() + 44.0, stage_label, Act::GuideStage(true), true, self.guide_stage);
         self.add_button(w - 120.0, self.top_h() + 10.0, w - 20.0, self.top_h() + 44.0, t!("閉じる", "Close", "关闭"), Act::Close, true, false);
         let ty = self.top_h() + 52.0;
         let (tab_cols, _, tw) = group_tabs(w - 40.0);
@@ -2337,8 +2385,9 @@ impl Game {
             let ty = ty + (i / tab_cols) as f32 * 40.0;
             let bx = 20.0 + (i % tab_cols) as f32 * tw;
             let cur = i == self.guide_group;
-            let all = SPECIES.iter().filter(|s| s.group == *g).count();
-            let got = (0..n_entries()).filter(|&e| SPECIES[e].group == *g && self.prog.stars[e] > 0).count();
+            let in_tab = |e: usize| SPECIES[e].group == *g && (!self.guide_stage || has_stage(e));
+            let all = (0..n_entries()).filter(|&e| in_tab(e)).count();
+            let got = (0..n_entries()).filter(|&e| in_tab(e) && if self.guide_stage { self.prog.stage_stars[e] > 0 } else { self.prog.stars[e] > 0 }).count();
             self.add_button(bx, ty, bx + tw - 6.0, ty + 34.0, &format!("{} {}/{}", g.name(), got, all), Act::GuideTab(i), true, cur);
             if cur {
                 self.gfx.fill_rect(bx + 6.0, ty + 30.0, bx + tw - 12.0, ty + 33.0, [1.0, 0.9, 0.7, 1.0]);
@@ -2352,14 +2401,15 @@ impl Game {
             if cy0 + ch < y0 || cy0 > y1 - 10.0 {
                 continue;
             }
-            let st = self.prog.stars[e];
-            let name = if st > 0 { entry_name(e).to_string() } else { "？？？".to_string() };
+            let st = if self.guide_stage { self.prog.stage_stars[e] } else { self.prog.stars[e] };
+            let name = if st > 0 { if self.guide_stage { stage_name(e) } else { entry_name(e).to_string() } } else { "？？？".to_string() };
             let vis_y0 = cy0.max(y0);
             let vis_y1 = (cy0 + ch).min(y1);
             if cy0 + ch - 26.0 >= y0 && cy0 + ch <= y1 + 1.0 {
                 self.gfx.text(&name, cx0 + 4.0, cy0 + ch - 22.0, cw - 8.0, 16.0, Font::NormalCenter, if st > 0 { TEXT } else { DIM });
             }
-            if self.prog.fresh[e] && cy0 >= y0 {
+            let fresh = if self.guide_stage { self.prog.stage_fresh[e] } else { self.prog.fresh[e] };
+            if fresh && cy0 >= y0 {
                 self.gfx.fill_round(cx0 + 4.0, cy0 + 4.0, cx0 + 46.0, cy0 + 20.0, 6.0, ACCENT);
                 self.gfx.text("NEW", cx0 + 4.0, cy0 + 4.0, 42.0, 16.0, Font::NormalCenter, [0.1, 0.05, 0.0, 1.0]);
             }
@@ -2396,6 +2446,15 @@ impl Game {
         let found = self.prog.stars[e] > 0;
         let pad = 20.0;
         self.draw_entry_art(e, ax0 + pad, ay0 + pad, ax1 - pad, ay1 - pad, if found { 1.0 } else { 0.14 });
+        // 冬越しの姿（右下の小さな枠。成虫とは別に集める）
+        if has_stage(e) {
+            let sz = ((ax1 - ax0) * 0.32).min(150.0);
+            let (bx0, by0) = (ax1 - sz - 8.0, ay1 - sz * 0.75 - 8.0);
+            self.gfx.rect(bx0, by0, ax1 - 8.0, ay1 - 8.0, [0.20, 0.16, 0.10, 0.92]);
+            self.gfx.rect_outline(bx0, by0, ax1 - 8.0, ay1 - 8.0, 1.0, [0.9, 0.8, 0.5, 0.8]);
+            let got = self.prog.stage_stars[e] > 0;
+            self.draw_stage_art(e, bx0 + 4.0, by0 + 4.0, ax1 - 12.0, ay1 - 26.0, if got { 1.0 } else { 0.14 });
+        }
         self.gfx.rect_outline(ax0, ay0, ax1, ay1, 1.5, [0.55, 0.85, 0.50, 0.6]);
     }
 
@@ -2409,6 +2468,21 @@ impl Game {
             self.gfx.text(t!("イラスト（大きさは実物とちがいます）", "Illustration (not to scale)", "插图（大小与实物不同）"), 30.0, y1 - 43.0, split - 50.0, 20.0, Font::NormalCenter, DIM);
         }
         self.gfx.text(&tf!("図鑑 No.{:02}　{}", "Guide No.{:02}  {}", "图鉴 No.{:02}　{}", e + 1, entry_group(e).name()), 24.0, top + 14.0, 420.0, 24.0, Font::Big, DIM);
+        // 冬越しの姿の枠の見出しと、探しに行くボタン
+        if has_stage(e) {
+            let (x0, y0e, _, _, _) = self.entry_layout();
+            let (ax0, ax1, ay1) = (x0, split - 10.0, y1 - 50.0);
+            let _ = (ax0, y0e);
+            let sz = ((ax1 - ax0) * 0.32).min(150.0);
+            let (bx0, by0) = (ax1 - sz - 8.0, ay1 - sz * 0.75 - 8.0);
+            let got = self.prog.stage_stars[e] > 0;
+            let st = SPECIES[e].winter().map(|w| w.0.name()).unwrap_or("");
+            let label = if got { tf!("{} ✔", "{} ✔", "{} ✔", st) } else { tf!("{} ？", "{} ?", "{} ？", st) };
+            self.gfx.text(&label, bx0, ay1 - 26.0, sz, 18.0, Font::NormalCenter, if got { GOOD } else { DIM });
+            if !got {
+                self.add_button(bx0, by0 - 34.0, ax1 - 8.0, by0 - 4.0, &tf!("{}を探す", "Find the {}", "寻找{}", st), Act::Goto(Target::Stage(e)), true, false);
+            }
+        }
         self.add_button(w - 120.0, top + 10.0, w - 20.0, top + 44.0, t!("一覧へ", "Back", "返回"), Act::Close, true, false);
         let list: Vec<usize> = (0..n_entries()).filter(|&x| entry_group(x) == entry_group(e)).collect();
         let k = list.iter().position(|&x| x == e).unwrap_or(0);
@@ -2510,8 +2584,8 @@ impl Game {
             let hh = self.gfx.measure_h(&b, Font::Normal, pw - 40.0);
             self.gfx.text(&b, x0 + 20.0, y, pw - 40.0, hh, Font::Normal, TEXT);
             y += hh + 8.0;
-            for (tg, need) in m.target_list() {
-                let ok = self.prog.stars[tg.entry()] >= need;
+            for (tg, _) in m.target_list() {
+                let ok = self.prog.has(tg);
                 let s = format!("{} {}", if ok { "✔" } else { "○" }, tg.name());
                 self.gfx.text(&s, x0 + 32.0, y + 3.0, pw - 200.0, 20.0, Font::Normal, if ok { GOOD } else { TEXT });
                 if !ok {
@@ -2700,13 +2774,15 @@ impl Game {
     fn render_photo_gl(&mut self) {
         let Some(p)=&self.photo else { return; };
         let Some(&(entry,stars,fresh,_))=p.lines.get(p.index) else { return; };
+        let young=p.stages.iter().any(|s|s.0==entry&&s.1!=Stage::Adult);
         let (age,w,h)=(p.age,self.w(),self.h());
         let reveal=crate::reveal::draw_stage(&mut self.gfx,w,h,age,stars,fresh);
         let [x0,y0,x1,y1]=reveal.bounds;
         if reveal.front {
             let pad=(x1-x0)*0.045;
             // 画像が無いものは手描きの絵（draw_entry_art の中で画像を先に試す）
-            self.draw_entry_art(entry,x0+pad,y0+48.0,x1-pad,y1-132.0,reveal.alpha);
+            if young { self.draw_stage_art(entry,x0+pad,y0+48.0,x1-pad,y1-132.0,reveal.alpha); }
+            else { self.draw_entry_art(entry,x0+pad,y0+48.0,x1-pad,y1-132.0,reveal.alpha); }
             let c=crate::reveal::accent(stars);
             self.gfx.rect(x0+pad,y1-122.0,x1-pad,y1-121.0,[c[0],c[1],c[2],0.45]);
         }
@@ -2729,11 +2805,7 @@ impl Game {
             self.gfx.text(&tf!("図鑑 No.{:02}","Guide No.{:02}","图鉴 No.{:02}",entry+1),
                 x0+14.0,y0+15.0,cw-90.0,20.0,Font::Normal,c);
             self.gfx.text(&format!("{} / {}",index+1,count),x1-68.0,y0+15.0,54.0,20.0,Font::NormalCenter,DIM);
-            let name = match p.stages.iter().find(|s| s.0 == entry) {
-                Some((_, Stage::Adult)) => tf!("{}（冬ごし中の成虫）", "{} (overwintering adult)", "{}（越冬的成虫）", entry_name(entry)),
-                Some((_, st)) => tf!("{}（{}）", "{} ({})", "{}（{}）", entry_name(entry), st.name()),
-                None => entry_name(entry).to_string(),
-            };
+            let name = photo_name(p, entry);
             self.gfx.text(&name,x0+10.0,y1-111.0,cw-20.0,27.0,Font::BigCenter,TEXT);
             if entry<n_species() {
                 self.gfx.text(SPECIES[entry].sci,x0+10.0,y1-83.0,cw-20.0,18.0,Font::NormalCenter,DIM);
@@ -2965,7 +3037,8 @@ mod tests {
                 assert_eq!(g.screen, Screen::Dive);
                 frame_subject(&mut g, target.entry());
                 g.shoot();
-                assert_eq!(g.prog.stars[target.entry()], 1, "could not photograph {} for {}", target.name(), m.title.0);
+                assert!(g.prog.has(target), "could not photograph {} for {}", target.name(), m.title.0);
+
                 g.close_photo();
                 g.do_act(Act::Surface);
             }
@@ -3089,7 +3162,8 @@ mod tests {
         for sp in 0..n_species() {
             g.close_photo();
             g.prog.month = 1;
-            g.goto(Target::Sp(sp));
+            let winters = SPECIES[sp].winter().is_some() && !SPECIES[sp].in_season(1);
+            g.goto(if winters { Target::Stage(sp) } else { Target::Sp(sp) });
             for _ in 0..400 {
                 g.update(0.1);
             }
@@ -3098,7 +3172,7 @@ mod tests {
             let sc = g.scene.as_ref().unwrap();
             if SPECIES[sp].in_season(1) {
                 assert!(sc.creatures.iter().any(|c| c.sp == sp && c.winter.is_none()));
-            } else if SPECIES[sp].winter().is_some() {
+            } else if winters {
                 assert_eq!(g.prog.month, 1, "{} should be found in January", SPECIES[sp].slug);
                 assert!(sc.creatures.iter().any(|c| c.sp == sp && c.winter.is_some()), "{} not wintering here", SPECIES[sp].slug);
                 wintering += 1;
@@ -3107,7 +3181,13 @@ mod tests {
             }
             frame_subject(&mut g, sp);
             g.shoot();
-            assert_eq!(g.prog.stars[sp], 1, "could not photograph {} in winter", SPECIES[sp].slug);
+            if has_stage(sp) && !SPECIES[sp].in_season(g.prog.month) {
+                // たまご・幼虫・さなぎは、成虫とは別に収録される
+                assert_eq!(g.prog.stage_stars[sp], 1, "could not photograph the winter form of {}", SPECIES[sp].slug);
+                assert_eq!(g.prog.stars[sp], 0, "{}: a larva must not count as the adult", SPECIES[sp].slug);
+            } else {
+                assert_eq!(g.prog.stars[sp], 1, "could not photograph {} in winter", SPECIES[sp].slug);
+            }
             g.close_photo();
             g.do_act(Act::Surface);
         }

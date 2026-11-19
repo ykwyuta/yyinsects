@@ -5,7 +5,8 @@ use crate::save::{RResult, Reader, Writer};
 
 const MAGIC: &[u8; 4] = b"YYI1";
 /// 2：いまの月を記録する版。3：時間帯も記録する版
-const VERSION: u32 = 3;
+/// 4：冬越しの姿（たまご・幼虫・さなぎ）の収録も記録する版
+const VERSION: u32 = 4;
 
 #[derive(Clone)]
 pub struct Progress {
@@ -13,6 +14,9 @@ pub struct Progress {
     pub stars: Vec<u8>,
     /// まだ図鑑で見ていない新しい項目
     pub fresh: Vec<bool>,
+    /// 冬越しの姿（たまご・幼虫・さなぎ）を収録したか（成虫とは別）
+    pub stage_stars: Vec<u8>,
+    pub stage_fresh: Vec<bool>,
     /// 選んでいる宿題（どの順番でも取り組める）
     pub mission: usize,
     /// カプセルの場所（経緯度）
@@ -30,7 +34,7 @@ pub struct Progress {
 impl Progress {
     pub fn new() -> Progress {
         let s = &crate::earth::SPOTS[crate::earth::S_SHOWA];
-        Progress { stars: vec![0; n_entries()], fresh: vec![false; n_entries()], mission: 0, lon: s.lon, lat: s.lat, month: 7, time: 1, photos: 0, intro_done: false, light: false }
+        Progress { stars: vec![0; n_entries()], fresh: vec![false; n_entries()], stage_stars: vec![0; n_entries()], stage_fresh: vec![false; n_entries()], mission: 0, lon: s.lon, lat: s.lat, month: 7, time: 1, photos: 0, intro_done: false, light: false }
     }
 
     pub fn found(&self) -> usize {
@@ -52,9 +56,32 @@ impl Progress {
         }
     }
 
+    /// 冬越しの姿を収録する。(新しい項目か, 記録が変わったか)
+    pub fn record_stage(&mut self, entry: usize) -> (bool, bool) {
+        if self.stage_stars[entry] > 0 {
+            return (false, false);
+        }
+        self.stage_stars[entry] = 1;
+        self.stage_fresh[entry] = true;
+        (true, true)
+    }
+
+    /// 冬越しの姿を集めた数
+    pub fn stages_found(&self) -> usize {
+        self.stage_stars.iter().filter(|&&s| s > 0).count()
+    }
+
+    /// 宿題の対象を収録したか
+    pub fn has(&self, t: crate::mission::Target) -> bool {
+        match t {
+            crate::mission::Target::Sp(i) => self.stars[i] > 0,
+            crate::mission::Target::Stage(i) => self.stage_stars[i] > 0,
+        }
+    }
+
     /// その宿題に合格しているか（収録は消えないので、一度合格すればずっと合格）
     pub fn is_done(&self, i: usize) -> bool {
-        mission_done(&MISSIONS[i], &self.stars)
+        mission_done(&MISSIONS[i], &self.stars, &self.stage_stars)
     }
 
     /// 宿題ごとの合格（写真を撮る前に取っておき、`advance` に渡す）
@@ -113,6 +140,14 @@ impl Progress {
         w.u32(self.photos);
         w.bool(self.intro_done);
         w.bool(self.light);
+        let stages: Vec<usize> = (0..self.stage_stars.len()).filter(|&i| self.stage_stars[i] > 0).collect();
+        w.usize(stages.len());
+        for i in stages {
+            let slug = crate::life::SPECIES[i].slug.as_bytes();
+            w.usize(slug.len());
+            w.bytes(slug);
+            w.bool(self.stage_fresh[i]);
+        }
         w.buf
     }
 
@@ -148,6 +183,18 @@ impl Progress {
         p.photos = r.u32()?;
         p.intro_done = r.bool()?;
         p.light = r.bool()?;
+        if v >= 4 {
+            let n = r.len(4096)?;
+            for _ in 0..n {
+                let len = r.len(256)?;
+                let slug = String::from_utf8_lossy(r.bytes(len)?).to_string();
+                let f = r.bool()?;
+                if let Some(j) = crate::life::SPECIES.iter().position(|s| s.slug == slug) {
+                    p.stage_stars[j] = 1;
+                    p.stage_fresh[j] = f;
+                }
+            }
+        }
         if p.is_done(p.mission) {
             p.select_next(1);
         }
@@ -173,6 +220,7 @@ mod tests {
         let mut p = Progress::new();
         p.record(3, 1);
         p.record(n_entries() - 1, 1);
+        p.record_stage(5);
         p.lon = 139.5;
         p.lat = 35.25;
         p.month = 12;
@@ -183,6 +231,8 @@ mod tests {
         let q = Progress::from_bytes(&b).unwrap();
         assert_eq!(q.stars, p.stars);
         assert_eq!(q.fresh, p.fresh);
+        assert_eq!(q.stage_stars, p.stage_stars);
+        assert_eq!(q.stage_stars[5], 1);
         assert_eq!(q.lon, 139.5);
         assert_eq!(q.month, 12);
         assert_eq!(q.time, 3);

@@ -4,19 +4,23 @@ use crate::life::*;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Target {
+    /// 成虫
     Sp(usize),
+    /// 冬越しの姿（たまご・幼虫・さなぎ）
+    Stage(usize),
 }
 
 impl Target {
     /// 図鑑の項目番号
     pub fn entry(self) -> usize {
         match self {
-            Target::Sp(i) => i,
+            Target::Sp(i) | Target::Stage(i) => i,
         }
     }
-    pub fn name(self) -> &'static str {
+    pub fn name(self) -> String {
         match self {
-            Target::Sp(i) => SPECIES[i].name.get(),
+            Target::Sp(i) => SPECIES[i].name.get().to_string(),
+            Target::Stage(i) => stage_name(i),
         }
     }
 }
@@ -27,7 +31,7 @@ pub struct Mission {
     pub brief: L,
     /// 合格したときの先生のことば
     pub done: L,
-    /// 撮って図鑑に収録する虫（slug）
+    /// 撮って図鑑に収録する虫（slug。「slug@stage」は冬越しの姿）
     pub targets: &'static [&'static str],
 }
 
@@ -39,7 +43,13 @@ pub fn species_index(slug: &str) -> usize {
 impl Mission {
     /// (対象, 必要な収録の数 1)
     pub fn target_list(&self) -> Vec<(Target, u8)> {
-        self.targets.iter().map(|s| (Target::Sp(species_index(s)), 1)).collect()
+        self.targets
+            .iter()
+            .map(|s| match s.strip_suffix("@stage") {
+                Some(slug) => (Target::Stage(species_index(slug)), 1),
+                None => (Target::Sp(species_index(s)), 1),
+            })
+            .collect()
     }
 }
 
@@ -224,11 +234,38 @@ pub static MISSIONS: &[Mission] = &[
         done: L("夜の虫は、目よりも触角やにおい、音を手がかりに仲間や食べものを探します。", "Night insects find mates and food with their antennae, smell and sound more than their eyes.", "夜行昆虫更多依靠触角、气味和声音而不是眼睛来寻找同伴和食物。"),
         targets: &["japanese-rhinoceros-beetle", "emma-field-cricket", "japanese-luna-moth"],
     },
+    Mission {
+        title: L("冬越しのすがた", "Winter forms", "越冬的样子"),
+        brief: L(
+            "成虫が見られない季節も、虫はたまご・幼虫・さなぎで冬を越しています。カブトムシの幼虫、オオカマキリのたまごのかたまり、モンシロチョウのさなぎを見つけましょう。土の中や枝、木の幹をよくさがしてね。",
+            "Even when no adults are about, insects survive the winter as eggs, larvae or pupae. Find a rhinoceros beetle larva, a Chinese mantis egg case and a small white pupa. Search the soil, twigs and tree trunks.",
+            "即使看不到成虫的季节，昆虫也以卵、幼虫或蛹的形态越冬。请找到独角仙的幼虫、中华大刀螳的卵鞘和菜粉蝶的蛹。仔细找找土里、树枝和树干。",
+        ),
+        done: L("同じ虫でも、時期によって姿もすむ場所もまったくちがいます。", "The same insect can look and live completely differently at different times of year.", "同一种昆虫在不同时期，样子和栖息地完全不同。"),
+        targets: &["japanese-rhinoceros-beetle@stage", "chinese-mantis@stage", "cabbage-white@stage"],
+    },
 ];
 
+/// 冬越しの姿の名前（「カブトムシの幼虫」）
+pub fn stage_name(i: usize) -> String {
+    let sp = &SPECIES[i];
+    match sp.winter() {
+        Some((st, _)) => tf!("{}の{}", "{} {}", "{}的{}", sp.name.get(), st.name()),
+        None => sp.name.get().to_string(),
+    }
+}
+
+/// 別に集める冬越しの姿があるか（たまご・幼虫・さなぎ。成虫のまま冬を越す虫は成虫として集める）
+pub fn has_stage(i: usize) -> bool {
+    matches!(SPECIES[i].winter(), Some((st, _)) if st != crate::life::Stage::Adult)
+}
+
 /// 宿題に合格したか
-pub fn mission_done(m: &Mission, stars: &[u8]) -> bool {
-    m.targets.iter().all(|s| stars.get(species_index(s)).copied().unwrap_or(0) >= 1)
+pub fn mission_done(m: &Mission, stars: &[u8], stage_stars: &[u8]) -> bool {
+    m.target_list().iter().all(|&(t, _)| match t {
+        Target::Sp(i) => stars.get(i).copied().unwrap_or(0) >= 1,
+        Target::Stage(i) => stage_stars.get(i).copied().unwrap_or(0) >= 1,
+    })
 }
 
 #[cfg(test)]
@@ -241,9 +278,15 @@ mod tests {
             assert!(m.targets.len() >= 3, "{}", m.title.0);
             for &(t, _) in &m.target_list() {
                 assert!(!places_of(t.entry()).is_empty());
+                if let Target::Stage(i) = t {
+                    assert!(has_stage(i), "{}", SPECIES[i].slug);
+                }
             }
             // 宿題の虫が、そろって見られる月がある
-            assert!((1..=12u8).any(|mo| m.target_list().iter().all(|(t, _)| SPECIES[t.entry()].in_season(mo))), "{}", m.title.0);
+            assert!((1..=12u8).any(|mo| m.target_list().iter().all(|&(t, _)| match t {
+                Target::Sp(i) => SPECIES[i].in_season(mo),
+                Target::Stage(i) => !SPECIES[i].in_season(mo),
+            })), "{}", m.title.0);
         }
     }
 }

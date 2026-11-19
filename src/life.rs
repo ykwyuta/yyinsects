@@ -752,12 +752,32 @@ pub fn places_of(i: usize) -> Vec<(usize, Habitat)> {
 /// 場所は near（経緯度）からいちばん近いところ
 pub fn where_is(i: usize, near: (f32, f32), month: u8) -> (usize, Habitat, u8) {
     let sp = &SPECIES[i];
-    let somewhere = |m: u8| places_of(i).into_iter().any(|(s, h)| lives_here(sp, s, h, m));
-    // 冬越しの姿でもいれば月はそのまま。どこにもいなければ（南から来る虫）、いちばん近い成虫の月へ
+    // 成虫は、いまの月が成虫の季節でなければ、いちばん近い成虫の月へ（冬越しの姿は where_is_stage）
     let month = (0..12u8)
         .flat_map(|d| [month as i32 + d as i32, month as i32 - d as i32])
         .map(|m| (m - 1).rem_euclid(12) as u8 + 1)
-        .find(|&m| somewhere(m))
+        .find(|&m| sp.in_season(m))
+        .unwrap_or(month);
+    let (s, h) = places_of(i)
+        .into_iter()
+        .filter(|&(s, h)| lives_here(sp, s, h, month))
+        .min_by(|a, b| {
+            let da = km_dist(near, (SPOTS[a.0].lon, SPOTS[a.0].lat));
+            let db = km_dist(near, (SPOTS[b.0].lon, SPOTS[b.0].lat));
+            da.partial_cmp(&db).unwrap()
+        })
+        .unwrap_or((0, Habitat::Forest));
+    (s, h, month)
+}
+
+/// 冬越しの姿（成虫の季節でない月）に会いに行くスポット・場面・月。
+/// いまの月が成虫の季節なら、いちばん近い季節外の月へ
+pub fn where_is_stage(i: usize, near: (f32, f32), month: u8) -> (usize, Habitat, u8) {
+    let sp = &SPECIES[i];
+    let month = (0..12u8)
+        .flat_map(|d| [month as i32 + d as i32, month as i32 - d as i32])
+        .map(|m| (m - 1).rem_euclid(12) as u8 + 1)
+        .find(|&m| !sp.in_season(m))
         .unwrap_or(month);
     let (s, h) = places_of(i)
         .into_iter()
@@ -811,10 +831,12 @@ mod tests {
         let moth = SPECIES.iter().find(|s| s.slug == "winter-moth").unwrap();
         assert!(moth.in_season(12) && moth.in_season(1) && !moth.in_season(7));
         let i = SPECIES.iter().position(|s| s.slug == "japanese-rhinoceros-beetle").unwrap();
-        // 12月のカブトムシは、幼虫で土の中にいる
-        let (s12, h12, m12) = where_is(i, (139.7, 35.7), 12);
+        // 成虫に会いに行くなら成虫の月へ、幼虫なら冬越しの月のまま土の中へ
+        assert_eq!(where_is(i, (139.7, 35.7), 12).2, 8);
+        let (s12, h12, m12) = where_is_stage(i, (139.7, 35.7), 12);
         assert_eq!(m12, 12);
         assert!(!h12.is_water() && lives_here(&SPECIES[i], s12, h12, 12));
+        assert_eq!(where_is_stage(i, (139.7, 35.7), 7).2, 6);
         assert_eq!(SPECIES[i].winter(), Some((Stage::Grub, Site::Soil)));
         // ウスバキトンボは関東で冬を越せないので、成虫の月へ
         let g = SPECIES.iter().position(|s| s.slug == "wandering-glider").unwrap();
