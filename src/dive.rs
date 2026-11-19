@@ -113,6 +113,8 @@ pub struct Scene {
     pub spot: usize,
     /// 月（1〜12）
     pub month: u8,
+    /// 時間帯 0=早朝 1=昼 2=夕方 3=夜
+    pub time: u8,
     pub w: f32,
     /// 地面（水のある場面は水底。帯の奥の縁）の y
     floor: Vec<f32>,
@@ -181,7 +183,7 @@ pub fn stars_of(score: f32) -> u8 {
 }
 
 impl Scene {
-    pub fn new(spot: usize, hab: Habitat, month: u8, seed: u32) -> Scene {
+    pub fn new(spot: usize, hab: Habitat, month: u8, time: u8, seed: u32) -> Scene {
         let mut rng = Rng::new(seed as u64 ^ 0x9e37_79b9);
         let w = 30.0;
         let n = (w / FSTEP) as usize + 2;
@@ -205,6 +207,7 @@ impl Scene {
             hab,
             spot,
             month,
+            time,
             w,
             floor,
             creatures: Vec::new(),
@@ -300,7 +303,7 @@ impl Scene {
         }
         // 虫
         for (i, sp) in SPECIES.iter().enumerate() {
-            if !lives_here(sp, spot, hab, month) {
+            if !lives_here(sp, spot, hab, month, time) {
                 continue;
             }
             s.present.push(i);
@@ -423,6 +426,8 @@ impl Scene {
             Habitat::Forest | Habitat::Mountain => 0.85,
             _ => 1.0,
         };
+        // 早朝・夕方はうす暗く、夜は暗い（ライトが要る）
+        let base = base * [0.75, 1.0, 0.62, 0.2][self.time as usize % 4];
         if self.has_water() && y > 0.0 {
             base * (0.85 - y * 0.15).max(0.45)
         } else {
@@ -599,7 +604,7 @@ impl Scene {
                             cr.vx = ddx / d * speed;
                             cr.vy = ddy / d * speed + lift;
                             cr.x += cr.vx * dt;
-                            cr.y += cr.vy * dt;
+                            cr.y = (cr.y + cr.vy * dt).max(air0);
                             cr.facing = if ddx >= 0.0 { 1.0 } else { -1.0 };
                         }
                         cr.pitch = 0.0;
@@ -794,6 +799,16 @@ impl Scene {
     }
 
     fn sky_cols(&self) -> ([f32; 3], [f32; 3]) {
+        let (top, hor) = self.day_sky();
+        match self.time {
+            0 => (mix(top, [0.50, 0.58, 0.84], 0.6), mix(hor, [1.0, 0.80, 0.64], 0.7)),
+            2 => (mix(top, [0.32, 0.28, 0.54], 0.7), mix(hor, [1.0, 0.56, 0.30], 0.75)),
+            3 => ([0.02, 0.03, 0.10], [0.08, 0.10, 0.22]),
+            _ => (top, hor),
+        }
+    }
+
+    fn day_sky(&self) -> ([f32; 3], [f32; 3]) {
         if season_of(self.month) == 3 {
             return ([0.46, 0.60, 0.80], [0.84, 0.88, 0.92]);
         }
@@ -852,15 +867,42 @@ impl Scene {
         if !self.has_water() {
             g.rect(x0, yh, x1, y1, c4(hor, 1.0));
         }
-        // 太陽と雲
-        let sunx = x0 + (x1 - x0) * 0.8;
-        g.radial(sunx, yh - 4.0, 1.6, 24, [1.0, 0.98, 0.86, 0.6], [1.0, 0.9, 0.7, 0.0]);
-        g.circle(sunx, yh - 4.0, 0.35, 20, [1.0, 0.99, 0.92, 0.95]);
+        // 太陽（早朝は東の低い空、夕方は西の低い空）、夜は月と星
+        match self.time {
+            3 => {
+                for i in 0..60 {
+                    let h1 = crate::rng::hash2(i, 1, self.seed);
+                    let h2 = crate::rng::hash2(i, 2, self.seed);
+                    let tw = 0.5 + 0.5 * (self.t * 2.0 + i as f32).sin();
+                    g.circle(x0 + h1 * (x1 - x0), y0.min(yh - 6.0) + h2 * (yh - y0.min(yh - 6.0) - 1.0), 0.02 + 0.015 * tw, 6, [1.0, 1.0, 0.92, 0.5 + 0.4 * tw]);
+                }
+                let mx = x0 + (x1 - x0) * 0.75;
+                g.radial(mx, yh - 4.2, 1.2, 24, [0.85, 0.90, 1.0, 0.25], [0.85, 0.9, 1.0, 0.0]);
+                g.circle(mx, yh - 4.2, 0.3, 20, [0.98, 0.97, 0.88, 1.0]);
+                g.circle(mx + 0.12, yh - 4.28, 0.26, 20, [0.02, 0.03, 0.10, 1.0]);
+            }
+            t => {
+                let (fx, h, col) = match t {
+                    0 => (0.18, 1.2, [1.0, 0.86, 0.66]),
+                    2 => (0.82, 0.9, [1.0, 0.62, 0.32]),
+                    _ => (0.8, 4.0, [1.0, 0.98, 0.86]),
+                };
+                let sunx = x0 + (x1 - x0) * fx;
+                g.radial(sunx, yh - h, if t == 1 { 1.6 } else { 2.6 }, 24, c4(col, 0.6), c4(col, 0.0));
+                g.circle(sunx, yh - h, 0.35, 20, c4(mix(col, [1.0, 1.0, 1.0], 0.5), 0.95));
+            }
+        }
+        let cloud = match self.time {
+            0 => [1.0, 0.88, 0.84, 0.5],
+            2 => [1.0, 0.70, 0.55, 0.5],
+            3 => [0.30, 0.32, 0.42, 0.35],
+            _ => [1.0, 1.0, 1.0, 0.55],
+        };
         for i in 0..5 {
             let cx = ((i as f32 * 7.3 + self.t * 0.05 - (x0 + x1) * 0.4) % 40.0 + 40.0) % 40.0 + x0 - 5.0;
             let cy = yh - 3.6 - (i % 3) as f32 * 0.5;
             for k in 0..4 {
-                g.circle(cx + k as f32 * 0.4, cy - (k % 2) as f32 * 0.2, 0.35 + (k % 2) as f32 * 0.15, 14, [1.0, 1.0, 1.0, 0.55]);
+                g.circle(cx + k as f32 * 0.4, cy - (k % 2) as f32 * 0.2, 0.35 + (k % 2) as f32 * 0.15, 14, cloud);
             }
         }
         // 遠くの山・森・町（関東の景色）
@@ -1143,7 +1185,8 @@ impl Scene {
         // ホタルの光（暗いほど目立つ）
         if spd.art == crate::life::Art::Firefly && !light {
             let glow = (c.phase * 2.4).sin().max(0.0);
-            g.radial(x, y, len * 1.4, 14, [0.85, 1.0, 0.45, 0.35 * glow], [0.85, 1.0, 0.45, 0.0]);
+            let k = if self.time == 3 { 0.9 } else if self.time == 2 { 0.55 } else { 0.35 };
+            g.radial(x, y, len * if self.time == 3 { 2.4 } else { 1.4 }, 14, [0.85, 1.0, 0.45, k * glow], [0.85, 1.0, 0.45, 0.0]);
         }
     }
 
@@ -1196,9 +1239,9 @@ impl Scene {
         // 木かげの暗さ（ライトのまわりは明るい）
         let cy = (y0 + y1) * 0.5;
         let amb = self.ambient_at(cy.max(0.0).min(self.cap.y.max(-10.0)));
-        let dark = ((1.0 - amb) * 0.75).clamp(0.0, 0.8);
+        let dark = ((1.0 - amb) * 0.8).clamp(0.0, 0.82);
         if dark > 0.02 {
-            let col = [0.02, 0.05, 0.03, dark];
+            let col = if self.time == 3 { [0.01, 0.02, 0.07, dark] } else { [0.02, 0.05, 0.03, dark] };
             if light {
                 let (lx, ly) = (self.cap.x + self.cap.facing * 0.8, self.cap.y);
                 let r = 2.9;
@@ -1227,8 +1270,8 @@ mod tests {
     fn every_scene_runs_and_keeps_insects_in_bounds() {
         for (s, spot) in SPOTS.iter().enumerate() {
             for &h in spot.habs {
-                let mut sc = Scene::new(s, h, [7, 1, 4, 10][s % 4], 7 + s as u32);
-                assert!(!sc.present.is_empty() || sc.month == 1);
+                let mut sc = Scene::new(s, h, [7, 1, 4, 10][s % 4], (s % 4) as u8, 7 + s as u32);
+                assert!(!sc.present.is_empty() || sc.month != 7 || sc.time != 1);
                 for _ in 0..400 {
                     sc.update(1.0 / 30.0, 0.6, 0.1, None, true);
                 }
@@ -1243,7 +1286,7 @@ mod tests {
 
     #[test]
     fn photo_scores_close_subject_higher() {
-        let s = Scene::new(S_SHOWA, Habitat::Meadow, 7, 11);
+        let s = Scene::new(S_SHOWA, Habitat::Meadow, 7, 1, 11);
         let c = &s.creatures[0];
         let (x, y) = c.center();
         let near = View { cx: x, cy: y, ppm: 1600.0, w: 1600.0, h: 900.0 };

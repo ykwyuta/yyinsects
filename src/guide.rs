@@ -43,11 +43,16 @@ pub fn sections(e: usize, language: Lang) -> Vec<Section> {
     result.push(Section {
         title: "関東で会うには",
         body: format!(
-            "{}{}\n{}{}\n\n{}",
+            "{}{}\n{}{}\n{}{}\n\n{}",
             ja("成虫が見られる季節："),
             {
                 let (a, b) = sp.months;
                 if (a, b) == (1, 12) { ja("一年じゅう（冬は集まってじっとしている）").to_string() } else if a == b { format!("{}月", a) } else { format!("{}月から{}月", a, b) }
+            },
+            ja("活動する時間帯："),
+            {
+                let names = ["早朝", "昼", "夕方", "夜"];
+                if sp.times == 15 { ja("一日じゅう").to_string() } else { (0..4).filter(|t| sp.times & (1 << t) != 0).map(|t| names[t]).collect::<Vec<_>>().join("・") }
             },
             ja("このゲームでは、次の場所で会えます："),
             names.join("、"),

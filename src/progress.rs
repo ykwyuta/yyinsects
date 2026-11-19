@@ -4,8 +4,8 @@ use crate::mission::{mission_done, MISSIONS};
 use crate::save::{RResult, Reader, Writer};
 
 const MAGIC: &[u8; 4] = b"YYI1";
-/// 2：いまの月を記録する版
-const VERSION: u32 = 2;
+/// 2：いまの月を記録する版。3：時間帯も記録する版
+const VERSION: u32 = 3;
 
 #[derive(Clone)]
 pub struct Progress {
@@ -20,6 +20,8 @@ pub struct Progress {
     pub lat: f32,
     /// いまの月（1〜12）
     pub month: u8,
+    /// いまの時間帯 0=早朝 1=昼 2=夕方 3=夜
+    pub time: u8,
     pub photos: u32,
     pub intro_done: bool,
     pub light: bool,
@@ -28,7 +30,7 @@ pub struct Progress {
 impl Progress {
     pub fn new() -> Progress {
         let s = &crate::earth::SPOTS[crate::earth::S_SHOWA];
-        Progress { stars: vec![0; n_entries()], fresh: vec![false; n_entries()], mission: 0, lon: s.lon, lat: s.lat, month: 7, photos: 0, intro_done: false, light: false }
+        Progress { stars: vec![0; n_entries()], fresh: vec![false; n_entries()], mission: 0, lon: s.lon, lat: s.lat, month: 7, time: 1, photos: 0, intro_done: false, light: false }
     }
 
     pub fn found(&self) -> usize {
@@ -107,6 +109,7 @@ impl Progress {
         w.f32(self.lon);
         w.f32(self.lat);
         w.u8(self.month);
+        w.u8(self.time);
         w.u32(self.photos);
         w.bool(self.intro_done);
         w.bool(self.light);
@@ -139,6 +142,9 @@ impl Progress {
         if v >= 2 {
             p.month = r.u8()?.clamp(1, 12);
         }
+        if v >= 3 {
+            p.time = r.u8()?.min(3);
+        }
         p.photos = r.u32()?;
         p.intro_done = r.bool()?;
         p.light = r.bool()?;
@@ -170,6 +176,7 @@ mod tests {
         p.lon = 139.5;
         p.lat = 35.25;
         p.month = 12;
+        p.time = 3;
         p.photos = 42;
         p.intro_done = true;
         let b = p.to_bytes();
@@ -178,6 +185,7 @@ mod tests {
         assert_eq!(q.fresh, p.fresh);
         assert_eq!(q.lon, 139.5);
         assert_eq!(q.month, 12);
+        assert_eq!(q.time, 3);
         assert_eq!(q.photos, 42);
         assert!(q.intro_done);
         assert!(Progress::from_bytes(&b[..b.len() - 3]).is_err());

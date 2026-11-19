@@ -214,6 +214,16 @@ pub static MISSIONS: &[Mission] = &[
         done: L("虫たちは、たまご・幼虫・さなぎ・成虫など、種類ごとにちがう姿で冬をこします。", "Each kind of insect gets through winter in its own stage: egg, larva, pupa or adult.", "每种昆虫以不同的形态越冬：卵、幼虫、蛹或成虫。"),
         targets: &["winter-moth", "harlequin-ladybird", "seven-spot-ladybird"],
     },
+    Mission {
+        title: L("夜の観察会", "Night watch", "夜间观察会"),
+        brief: L(
+            "夜にだけ活動する虫もいます。時間帯を「夜」にして、カブトムシ・エンマコオロギ・オオミズアオを探しましょう。暗いのでライトを忘れずに。",
+            "Some insects come out only at night. Set the time to night and look for a rhinoceros beetle, an Emma field cricket and a Japanese luna moth. Don't forget your light.",
+            "有些昆虫只在夜里活动。把时间调到夜晚，寻找独角仙、黄脸油葫芦和绿尾大蚕蛾。天黑，别忘了开灯。",
+        ),
+        done: L("夜の虫は、目よりも触角やにおい、音を手がかりに仲間や食べものを探します。", "Night insects find mates and food with their antennae, smell and sound more than their eyes.", "夜行昆虫更多依靠触角、气味和声音而不是眼睛来寻找同伴和食物。"),
+        targets: &["japanese-rhinoceros-beetle", "emma-field-cricket", "japanese-luna-moth"],
+    },
 ];
 
 /// 宿題に合格したか

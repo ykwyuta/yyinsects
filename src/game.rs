@@ -98,6 +98,10 @@ enum Act {
     Month(u8),
     /// 前・次の月へ
     StepMonth(i32),
+    /// その時間帯へ（0=早朝 1=昼 2=夕方 3=夜）
+    TimeOfDay(u8),
+    /// 次・前の時間帯へ
+    StepTime(i32),
     /// 関東の全体を見る
     ShowKanto,
     EntryPage(i32),
@@ -642,6 +646,7 @@ impl Game {
                 Act::Voice => t!("声をつける、消す", "Turn voice on or off", "开关语音").to_string(),
                 Act::ReplayVoice => t!("もう一度聞く", "Listen again", "再听一次").to_string(),
                 Act::CycleMission(d) => if d < 0 { t!("前の宿題", "Previous task", "上一个作业") } else { t!("次の宿題", "Next task", "下一个作业") }.to_string(),
+                Act::StepTime(_) => t!("次の時間帯", "Next time of day", "下一个时间段").to_string(),
                 Act::StepMonth(d) => if d < 0 { t!("前の月", "Previous month", "上个月") } else { t!("次の月", "Next month", "下个月") }.to_string(),
                 Act::StepSpot(d) => if d < 0 { t!("前のスポット", "Previous spot", "上一个观察点") } else { t!("次のスポット", "Next spot", "下一个观察点") }.to_string(),
                 Act::Lens(d) => if d < 0 { t!("小さく見る", "Zoom out", "缩小") } else { t!("大きく見る", "Zoom in", "放大") }.to_string(),
@@ -1029,6 +1034,7 @@ impl Game {
                 0xdb => self.do_act(Act::StepSpot(-1)),
                 0xdd => self.do_act(Act::StepSpot(1)),
                 0x4b => self.do_act(Act::ShowKanto),
+                0x54 => self.do_act(Act::StepTime(1)),
                 VK_PLUS | VK_ADD => {
                     self.zoom *= 1.25;
                     self.clamp_cam();
@@ -1156,6 +1162,11 @@ impl Game {
             }
             Act::ShowKanto => self.show_kanto(),
             Act::Month(m) => self.set_month(m),
+            Act::TimeOfDay(t) => self.set_time(t),
+            Act::StepTime(d) => {
+                let t = (self.prog.time as i32 + d).rem_euclid(4) as u8;
+                self.set_time(t);
+            }
             Act::StepMonth(d) => {
                 let m = (self.prog.month as i32 - 1 + d).rem_euclid(12) as u8 + 1;
                 self.set_month(m);
@@ -1274,6 +1285,24 @@ impl Game {
         self.autosave(false);
     }
 
+    /// 時間帯を変える。観察中は地図に戻ってから
+    fn set_time(&mut self, t: u8) {
+        let t = t % 4;
+        if t == self.prog.time {
+            return;
+        }
+        if self.screen == Screen::Dive {
+            self.do_act(Act::Surface);
+        }
+        self.prog.time = t;
+        let label = tf!("{}になった", "It's now {}", "到了{}", time_name(t));
+        let prev = std::mem::take(&mut self.month_notice);
+        self.notices.retain(|n| n.0 != prev);
+        self.month_notice = label.clone();
+        self.notify_text(label);
+        self.autosave(false);
+    }
+
     /// 観察スポットへ飛ぶ（hab：着いたら降りる場面）
     fn fly_to_spot(&mut self, s: usize, hab: Option<Habitat>) {
         if self.screen == Screen::Dive {
@@ -1336,10 +1365,13 @@ impl Game {
     fn goto(&mut self, tg: Target) {
         let Target::Sp(i) = tg;
         let near = map_to_lonlat(self.cap.0, self.cap.1);
-        let (s, h, m) = where_is(i, near, self.prog.month);
+        let (s, h, m, t) = where_is(i, near, self.prog.month, self.prog.time);
         self.fly_to_spot(s, Some(h));
         if m != self.prog.month {
             self.set_month(m);
+        }
+        if t != self.prog.time {
+            self.set_time(t);
         }
         if self.cap_target.is_none() {
             self.notify_text(tf!("ここの「{}」で会えるよ", "You can find it in the {} here", "在这里的{}能遇到", h.name()));
@@ -1355,7 +1387,7 @@ impl Game {
             return;
         }
         self.seed = self.seed.wrapping_mul(1664525).wrapping_add(1013904223);
-        let sc = Scene::new(s, hab, self.prog.month, self.seed);
+        let sc = Scene::new(s, hab, self.prog.month, self.prog.time, self.seed);
         self.dcam = (sc.cap.x + 0.5, sc.cap.y);
         self.scene = Some(sc);
         self.lens = 1.0;
@@ -1365,7 +1397,9 @@ impl Game {
         self.ldown = None;
         self.pending_hab = None;
         if self.scene.as_ref().map_or(false, |sc| sc.present.is_empty()) {
-            self.notify_text(tf!("{}は、ここで見られる虫がいない。ほかの季節に来てみよう", "No insects here in {}. Try another season", "{}这里看不到昆虫。换个季节再来吧", month_name(self.prog.month)));
+            self.notify_text(tf!("{}の{}は、ここで見られる虫がいない。ほかの季節や時間帯に来てみよう", "No insects here in {} ({}). Try another season or time of day", "{}的{}这里看不到昆虫。换个季节或时间再来吧", month_name(self.prog.month), time_name(self.prog.time)));
+        } else if self.prog.time == 3 && !self.prog.light {
+            self.notify_text(t!("夜は暗い。ライト（L）をつけよう", "It's dark at night. Turn on your light (L)", "夜里很暗。打开灯（L）吧").to_string());
         } else if matches!(hab, Habitat::Forest | Habitat::Mountain) && !self.prog.light && season_of(self.prog.month) != 3 {
             self.notify_text(t!("木かげは暗い。ライト（L）をつけると写真がきれいに撮れる", "It's shady under the trees. Turn on your light (L) for better photos", "树荫下很暗。打开灯（L）能拍得更清楚").to_string());
         }
@@ -1591,7 +1625,16 @@ impl Game {
         for (tex, r) in &self.map_tex {
             self.gfx.draw_textured(tex, r[0], r[1], r[2], r[3], [1.0, 1.0, 1.0, 1.0], true);
         }
-        // 関東の外を少し暗く（準備中）
+        // 時間帯の色（早朝・夕方は色づき、夜は暗い）
+        let tint = match self.prog.time {
+            0 => Some([1.0, 0.72, 0.52, 0.12]),
+            2 => Some([0.95, 0.42, 0.18, 0.20]),
+            3 => Some([0.0, 0.02, 0.12, 0.50]),
+            _ => None,
+        };
+        if let (Some(c), true) = (tint, self.screen != Screen::Title) {
+            self.gfx.rect(0.0, 0.0, MAP_W, MAP_H, c);
+        }
         let ms = 1.0 / z;
         // レーダーの光る場所
         if self.screen == Screen::Map && self.radar.is_some() {
@@ -1721,10 +1764,10 @@ impl Game {
             let (x0, x1) = (350.0, w - 320.0);
             let cw = (x1 - x0).min(640.0);
             let cx = (x0 + x1) * 0.5;
-            (cx - cw * 0.5, self.top_h() + 8.0, cx + cw * 0.5, self.top_h() + 70.0)
+            (cx - cw * 0.5, self.top_h() + 8.0, cx + cw * 0.5, self.top_h() + 108.0)
         } else {
             let (_, ly0, _, _) = self.loc_rect();
-            (10.0, ly0 - 72.0, w - 10.0, ly0 - 10.0)
+            (10.0, ly0 - 110.0, w - 10.0, ly0 - 10.0)
         }
     }
 
@@ -1732,13 +1775,13 @@ impl Game {
         let (x0, y0, x1, y1) = self.month_rect();
         self.panel_box(x0, y0, x1, y1);
         let month = self.prog.month;
-        let title = tf!("{}　{}", "{}  {}", "{}　{}", month_name(month), season_name(month));
+        let title = tf!("{}　{}・{}", "{}  {} · {}", "{}　{}·{}", month_name(month), season_name(month), time_name(self.prog.time));
         self.gfx.text(&title, x0 + 12.0, y0 + 4.0, 200.0, 20.0, Font::Normal, TEXT);
-        let hint = t!("月を選ぶと季節が変わる（, .）", "Pick a month to change the season (, .)", "选择月份改变季节（, .）");
+        let hint = t!("月と時間帯を選ぶ（, . と T）", "Pick a month and time of day (, . and T)", "选择月份和时间段（, . 和 T）");
         self.gfx.text(hint, x0 + 150.0, y0 + 6.0, x1 - x0 - 160.0, 16.0, Font::Small, DIM);
         let bw = 30.0;
-        self.add_button(x0 + 6.0, y0 + 26.0, x0 + 6.0 + bw, y1 - 6.0, "◀", Act::StepMonth(-1), true, false);
-        self.add_button(x1 - 6.0 - bw, y0 + 26.0, x1 - 6.0, y1 - 6.0, "▶", Act::StepMonth(1), true, false);
+        self.add_button(x0 + 6.0, y0 + 26.0, x0 + 6.0 + bw, y0 + 60.0, "◀", Act::StepMonth(-1), true, false);
+        self.add_button(x1 - 6.0 - bw, y0 + 26.0, x1 - 6.0, y0 + 60.0, "▶", Act::StepMonth(1), true, false);
         let (cx0, cx1) = (x0 + 10.0 + bw, x1 - 10.0 - bw);
         let cw = (cx1 - cx0) / 12.0;
         let cols = [[0.55, 0.80, 0.45], [0.30, 0.66, 0.40], [0.86, 0.56, 0.22], [0.62, 0.72, 0.86]];
@@ -1746,7 +1789,7 @@ impl Game {
         for m in 1..=12u8 {
             let a = cx0 + (m - 1) as f32 * cw;
             let b = a + cw - 2.0;
-            let (ty0, ty1) = (y0 + 26.0, y1 - 6.0);
+            let (ty0, ty1) = (y0 + 26.0, y0 + 60.0);
             let c = cols[season_of(m)];
             let cur = m == month;
             self.gfx.fill_round(a, ty0, b, ty1, 5.0, if cur { [c[0], c[1], c[2], 1.0] } else { [c[0] * 0.45, c[1] * 0.45, c[2] * 0.45, 0.95] });
@@ -1767,6 +1810,34 @@ impl Game {
             }
             self.buttons.push(Button { x0: a, y0: ty0, x1: b, y1: ty1, act: Act::Month(m), label: month_name(m), enabled: true });
         }
+        // 時間帯（早朝・昼・夕方・夜）
+        let tw = (x1 - x0 - 12.0) / 4.0;
+        let tcols = [[0.98, 0.72, 0.56], [0.55, 0.78, 0.98], [0.95, 0.52, 0.28], [0.16, 0.20, 0.42]];
+        for t in 0..4u8 {
+            let a = x0 + 6.0 + t as f32 * tw;
+            let b = a + tw - 4.0;
+            let (ty0, ty1) = (y0 + 66.0, y1 - 6.0);
+            let c = tcols[t as usize];
+            let cur = t == self.prog.time;
+            self.gfx.fill_round(a, ty0, b, ty1, 5.0, if cur { [c[0], c[1], c[2], 1.0] } else { [c[0] * 0.4, c[1] * 0.4, c[2] * 0.4, 0.95] });
+            if cur {
+                self.gfx.stroke_round(a, ty0, b, ty1, 5.0, 2.0, [1.0, 1.0, 1.0, 0.95]);
+            }
+            let icon = ["🌅", "☀", "🌇", "🌙"][t as usize];
+            let label = format!("{} {}", icon, time_name(t));
+            let tc = if cur && t != 3 { [0.05, 0.08, 0.05, 1.0] } else { TEXT };
+            self.gfx.text(&label, a, ty0 + 3.0, b - a, ty1 - ty0 - 3.0, Font::NormalCenter, tc);
+            if let Some(e) = self.radar {
+                if SPECIES[e].active_at(t) {
+                    self.gfx.fill_rect(a + 2.0, ty1 - 4.0, b - 2.0, ty1 - 1.0, GOLD);
+                }
+            }
+            if self.mouse.0 >= a && self.mouse.0 <= b && self.mouse.1 >= ty0 && self.mouse.1 <= ty1 {
+                let n = SPECIES.iter().filter(|s| s.in_season(month) && s.active_at(t)).count();
+                self.tip = Some(tf!("{}の{}\n見られる虫：{}種", "{} in {}\nInsects about: {}", "{}的{}\n能看到的昆虫：{}种", month_name(month), time_name(t), n));
+            }
+            self.buttons.push(Button { x0: a, y0: ty0, x1: b, y1: ty1, act: Act::TimeOfDay(t), label: time_name(t).to_string(), enabled: true });
+        }
     }
 
     /// 地図のレーダーのカード：何を探しているか、どこにいるか
@@ -1784,13 +1855,16 @@ impl Game {
         self.gfx.text(entry_name(e), x0 + 38.0, y0 + 20.0, cw - 90.0, 20.0, Font::Normal, TEXT);
         self.add_button(x1 - 44.0, y0 + 6.0, x1 - 8.0, y0 + 32.0, "×", Act::RadarOff, true, false);
         let month = self.prog.month;
-        let here = self.at_spot().filter(|&s| SPOTS[s].habs.iter().any(|&h| lives_here(&SPECIES[e], s, h, month)));
-        let (line, go) = if !SPECIES[e].in_season(month) {
+        let time = self.prog.time;
+        let here = self.at_spot().filter(|&s| SPOTS[s].habs.iter().any(|&h| lives_here(&SPECIES[e], s, h, month, time)));
+        let (line, go) = if SPECIES[e].in_season(month) && !SPECIES[e].active_at(time) {
+            (tf!("{}にはいない。{}に見られる", "Not about in the {}. Seen: {}", "{}看不到。{}能看到", time_name(time), times_text(SPECIES[e].times)), Some(t!("その時間へ行く", "Go to that time", "前往那个时间")))
+        } else if !SPECIES[e].in_season(month) {
             (tf!("{}にはいない。{}に見られる", "Not around in {}. Seen {}", "{}看不到。{}能看到", month_name(month), months_text(SPECIES[e].months)), Some(t!("その季節へ行く", "Go to its season", "前往那个季节")))
         } else if self.cap_target.is_some() {
             (t!("移動中…　着いたら降りよう（Enter）", "On the way… land when you arrive (Enter)", "移动中…　到达后降落（Enter）").to_string(), None)
         } else if let Some(s) = here {
-            let hs: Vec<&str> = SPOTS[s].habs.iter().filter(|&&h| lives_here(&SPECIES[e], s, h, month)).map(|h| h.name()).collect();
+            let hs: Vec<&str> = SPOTS[s].habs.iter().filter(|&&h| lives_here(&SPECIES[e], s, h, month, time)).map(|h| h.name()).collect();
             (tf!("ここの「{}」にいる！", "Here, in the {}!", "就在这里的{}！", hs.join(lang::sep())), None)
         } else {
             (tf!("光っているスポットにいる（{}か所）", "Found at the glowing spots ({})", "在发光的观察点（{}处）", self.radar_cells.len()), Some(t!("いちばん近い所へ", "Go to the nearest", "前往最近处")))
@@ -1943,7 +2017,7 @@ impl Game {
             let ew = if lon >= 0.0 { t!("東経", "E", "东经") } else { t!("西経", "W", "西经") };
             (format!("{}{:.1}° {}{:.1}°", ns, lat.abs(), ew, lon.abs()), t!("関東地方", "Kanto", "关东地区").to_string())
         };
-        let small = format!("{}（{}）・{}", month_name(self.prog.month), season_name(self.prog.month), small);
+        let small = format!("{}（{}）・{}・{}", month_name(self.prog.month), season_name(self.prog.month), time_name(self.prog.time), small);
         self.gfx.text(&small, 120.0, 4.0, 300.0, 18.0, Font::Small, DIM);
         self.gfx.text(&big, 120.0, 18.0, 260.0, 24.0, Font::Big, TEXT);
         // 右のボタン
@@ -2076,7 +2150,7 @@ impl Game {
         self.panel_box(x0, y0, x0 + cw, y1);
         self.gfx.text(&format!("{}　{}", hab.name(), depth_s), x0 + 12.0, y0 + 8.0, cw - 24.0, 20.0, Font::Normal, TEXT);
         if present.is_empty() {
-            self.gfx.text(t!("この季節、ここに虫はいない", "No insects here this season", "这个季节这里没有昆虫"), x0 + 12.0, y0 + 30.0, cw - 24.0, 18.0, Font::Small, GOLD);
+            self.gfx.text(t!("この季節・時間帯、ここに虫はいない", "No insects here at this season and time", "这个季节和时间这里没有昆虫"), x0 + 12.0, y0 + 30.0, cw - 24.0, 18.0, Font::Small, GOLD);
         } else {
         self.gfx.text(&tf!("ここの虫：{}/{}種 収録済み", "Insects here: {}/{} logged", "此处昆虫：已收录 {}/{} 种", have, present.len()), x0 + 12.0, y0 + 30.0, cw - 24.0, 18.0, Font::Small, DIM);
         }
@@ -2342,7 +2416,7 @@ impl Game {
                 let mut sections = crate::guide::sections(e, lang::lang());
                 let metadata = format!("{} / {}・{}\n{}: {}\n{}: {}\n{}: {}\n{}: {}\n\n",
                     sp.sci, sp.group.order(), sp.family.get(),
-                    t!("季節", "Season", "季节"), months_text(sp.months),
+                    t!("季節", "Season", "季节"), format!("{}　{}: {}", months_text(sp.months), t!("時間帯", "Time", "时间段"), times_text(sp.times)),
                     t!("すみか", "Habitat", "栖息地"), hab_text(sp),
                     t!("会える場所", "Where", "地点"), place_text(e),
                     t!("大きさ", "Size", "大小"), size_text(sp.len_cm));
@@ -2365,6 +2439,7 @@ impl Game {
         } else {
             for (label, value) in [
                 (t!("季節", "Season", "季节"), months_text(sp.months)),
+                (t!("時間帯", "Time", "时间段"), times_text(sp.times)),
                 (t!("すみか", "Habitat", "栖息地"), hab_text(sp)),
                 (t!("会える場所", "Where", "地点"), place_text(e)),
             ] {
@@ -2456,7 +2531,7 @@ impl Game {
         let lines: Vec<(&str, &str)> = if self.touch {
             vec![
                 (t!("地図", "Map", "地图"), t!("光る観察スポットをタップするとカプセルが飛ぶ・なぞって地図を動かす・2本指で拡大縮小", "Tap a glowing spot to fly there, drag to pan, pinch to zoom", "点击发光的观察点飞过去·拖动移动地图·双指缩放")),
-                (t!("季節", "Season", "季节"), t!("上の月の帯をタップすると季節が変わる。虫ごとに見られる月がちがう", "Tap a month on the bar to change the season. Each insect appears in its own months", "点击上方的月份条改变季节。每种昆虫出现的月份不同")),
+                (t!("季節", "Season", "季节"), t!("上の月の帯で季節、その下で早朝・昼・夕方・夜を選ぶ。虫ごとに見られる月と時間帯がちがう", "Pick the season on the month bar and the time of day below it. Each insect has its own months and times", "在上方月份条选择季节，下面选择清晨、白天、傍晚、夜晚。每种昆虫出现的月份和时间不同")),
                 (t!("降りる", "Land", "降落"), t!("スポットに着いたら、左下の「〜へ降りる」で林や草はら、池などへ", "At a spot, use the Land buttons at the bottom left to visit woods, meadows or ponds", "到达观察点后，用左下的降落按钮前往树林、草地或池塘")),
                 (t!("観察", "Observe", "观察"), t!("触れた方へカプセルが進む。＋－でズーム、撮影ボタンで撮る", "The capsule moves where you touch. ＋－ to zoom, shutter to shoot", "观测舱朝触碰方向前进。＋－变焦，按快门拍摄")),
                 (t!("関東の外", "Elsewhere", "关东以外"), t!("日本のほかの地方や外国は、いま準備中です", "Other regions of Japan and overseas are coming soon", "日本其他地区和国外正在准备中")),
@@ -2464,7 +2539,7 @@ impl Game {
         } else {
             vec![
                 (t!("地図", "Map", "地图"), t!("光る観察スポットをクリックして飛ぶ／[ と ] で前・次のスポット／ドラッグや矢印キーで地図を動かす／ホイールで拡大縮小／K で関東の全体", "Click a glowing spot to fly there / [ and ] for previous/next spot / drag or arrow keys to pan / wheel to zoom / K to show Kanto", "点击发光的观察点飞过去／[ 和 ] 切换观察点／拖动或方向键移动地图／滚轮缩放／K 查看关东全图")),
-                (t!("季節", "Season", "季节"), t!("上の月の帯をクリック、または , と . で前・次の月へ。虫ごとに見られる月がちがう", "Click the month bar, or use , and . for the previous/next month. Each insect appears in its own months", "点击上方的月份条，或用 , 和 . 切换月份。每种昆虫出现的月份不同")),
+                (t!("季節", "Season", "季节"), t!("上の月の帯をクリック、または , と . で前・次の月へ。その下で早朝・昼・夕方・夜を選ぶ（T で切り替え）。虫ごとに見られる月と時間帯がちがう。夜はライト（L）を使おう", "Click the month bar, or use , and . for the previous/next month. Below it, pick early morning, daytime, evening or night (T to cycle). Each insect has its own months and times. Use the light (L) at night", "点击上方的月份条，或用 , 和 . 切换月份。下面选择清晨、白天、傍晚、夜晚（T 切换）。每种昆虫出现的月份和时间不同。夜里用灯（L）")),
                 (t!("降りる", "Land", "降落"), t!("Enter：スポットの林・草はら・池などに降りる（左下のボタンで場所を選べる）", "Enter: land at the spot (choose woods, meadow, pond… with the buttons at the bottom left)", "Enter：降落到观察点（用左下的按钮选择树林、草地、池塘等）")),
                 (t!("観察", "Observe", "观察"), t!("WASD・矢印・マウスを押した方へ進む／Shift で加速／ホイール・Q/E でズーム／L でライト", "WASD, arrows or hold the mouse to move / Shift to boost / wheel or Q,E to zoom / L for light", "WASD·方向键·按住鼠标前进／Shift加速／滚轮·Q/E变焦／L开灯")),
                 (t!("撮影", "Photo", "拍摄"), t!("Space（または右クリック）：ある程度大きく・真ん中に・明るく写すと図鑑に収録できる", "Space (or right-click): a reasonably big, centred and bright shot goes into the guide", "Space（或右键）：拍得够大、居中、明亮，就能收录进图鉴")),
@@ -2560,9 +2635,9 @@ impl Game {
                 "第一站是关东地区。高尾山、明治神宫、井之头公园、筑波山、霞浦等，有许多适合观察昆虫的地方。其他地区和国外正在准备中。",
             ),
             L(
-                "地図で光っている観察スポットを押すと、カプセルが飛んでいきます。着いたら「雑木林へ降りる」などのボタンで、虫のすむ場所に降りましょう。虫には季節があります。地図の上の月の帯で、春・夏・秋・冬を行き来できますよ。",
-                "Press a glowing observation spot on the map and the capsule flies there. When you arrive, use a button such as 'Land in the woodland' to visit the insects' home. Insects have seasons: use the month bar at the top of the map to move between spring, summer, autumn and winter.",
-                "点击地图上发光的观察点，观测舱就会飞过去。到达后，用“降落到杂木林”等按钮，降落到昆虫生活的地方。昆虫是有季节的，用地图上方的月份条可以在春夏秋冬之间切换。",
+                "地図で光っている観察スポットを押すと、カプセルが飛んでいきます。着いたら「雑木林へ降りる」などのボタンで、虫のすむ場所に降りましょう。虫には季節があります。地図の上の月の帯で春・夏・秋・冬を、その下で早朝・昼・夕方・夜を選べます。カブトムシやホタルは夜の虫ですよ。",
+                "Press a glowing observation spot on the map and the capsule flies there. When you arrive, use a button such as 'Land in the woodland' to visit the insects' home. Insects have seasons and times: use the month bar at the top of the map for spring to winter, and the row below it for early morning, daytime, evening or night. Rhinoceros beetles and fireflies come out at night.",
+                "点击地图上发光的观察点，观测舱就会飞过去。到达后，用“降落到杂木林”等按钮，降落到昆虫生活的地方。昆虫有季节和时间之分。用地图上方的月份条切换春夏秋冬，下面一排可以选择清晨、白天、傍晚、夜晚。独角仙和萤火虫是夜里的昆虫哦。",
             ),
             L(
                 "虫は、大きく・真ん中に・明るく撮れば図鑑に収録されます。右上の宿題のカードの「行く」を押せば、カプセルが目的の虫のいる場所へ向かいます。では、いってらっしゃい！",
@@ -2922,6 +2997,38 @@ mod tests {
     }
 
     #[test]
+    fn time_of_day_changes_the_insects_and_is_saved() {
+        let mut g = started();
+        let kabuto = species_index("japanese-rhinoceros-beetle");
+        g.prog.time = 1;
+        g.goto(Target::Sp(kabuto));
+        assert!(SPECIES[kabuto].active_at(g.prog.time), "goto moves to an active time");
+        for _ in 0..400 {
+            g.update(0.1);
+        }
+        let h = g.pending_hab.unwrap();
+        g.enter_dive(h);
+        assert!(g.scene.as_ref().unwrap().present.contains(&kabuto));
+        g.do_act(Act::TimeOfDay(1));
+        assert_eq!(g.screen, Screen::Map);
+        g.enter_dive(h);
+        let sc = g.scene.as_ref().unwrap();
+        assert!(!sc.present.contains(&kabuto));
+        assert!(sc.present.iter().all(|&i| SPECIES[i].active_at(1)));
+        // 夜は暗く、ライトで明るくなる
+        g.do_act(Act::TimeOfDay(3));
+        g.enter_dive(h);
+        let sc = g.scene.as_ref().unwrap();
+        assert!(sc.ambient_at(sc.cap.y) < 0.3);
+        assert!(sc.light_at(sc.cap.x + 0.5, sc.cap.y, true) > 0.8);
+        let saved = Progress::from_bytes(&g.prog.to_bytes()).unwrap();
+        assert_eq!(saved.time, 3);
+        g.do_act(Act::Surface);
+        g.render();
+        assert_eq!(g.buttons.iter().filter(|b| matches!(b.act, Act::TimeOfDay(_))).count(), 4);
+    }
+
+    #[test]
     fn all_screens_render() {
         let mut g = game();
         g.frame(&[], 0.016, true);
@@ -2936,6 +3043,7 @@ mod tests {
         g.frame(&[], 0.016, true);
         for (s, spot) in SPOTS.iter().enumerate() {
             g.prog.month = [7, 1, 4, 10][s % 4];
+            g.prog.time = (s % 4) as u8;
             g.cap = lonlat_to_map(spot.lon, spot.lat);
             g.cap_target = None;
             for &h in spot.habs {
