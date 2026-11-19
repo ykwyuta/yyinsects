@@ -41,11 +41,24 @@ pub struct Creature {
     pub anchor: (f32, f32, bool),
     /// 跳んでいる・飛んでいる途中（地面の虫・とまる虫）
     pub airborne: bool,
+    /// 活動しない時間帯で、休んでいる（Some なら休む場所）
+    pub rest: Option<Rest>,
+}
+
+/// 巣（休んでいるハチ・アリのいるところ）
+pub struct Nest {
+    pub x: f32,
+    pub y: f32,
+    /// 0=地面の穴 1=木のうろ・切り株 2=巣箱 3=つり下がった巣
+    pub kind: u8,
 }
 
 impl Creature {
     /// 動いている度合い（0〜1）。はばたき・脚の動き
     pub fn activity(&self) -> f32 {
+        if self.rest.is_some() {
+            return 0.0;
+        }
         let beh = SPECIES[self.sp].beh;
         if matches!(beh, Beh::Flutter | Beh::Fly) || self.airborne {
             return 1.0;
@@ -56,6 +69,9 @@ impl Creature {
     /// 絵の中心
     pub fn center(&self) -> (f32, f32) {
         let sp = &SPECIES[self.sp];
+        if self.rest.is_some() {
+            return (self.x, self.y);
+        }
         if sp.beh.grounded() && !self.airborne {
             (self.x, self.y - art::base_lift(self.sp) * sp.disp_len() * self.scale)
         } else {
@@ -123,6 +139,7 @@ pub struct Scene {
     pub motes: Vec<Mote>,
     pub trees: Vec<Tree>,
     pub plants: Vec<Plant>,
+    pub nests: Vec<Nest>,
     pub cap: Capsule,
     pub t: f32,
     pub seed: u32,
@@ -215,6 +232,7 @@ impl Scene {
             motes: Vec::new(),
             trees: Vec::new(),
             plants: Vec::new(),
+            nests: Vec::new(),
             cap: Capsule { x: w * 0.5, y: if water { -0.9 } else { -1.3 }, vx: 0.0, vy: 0.0, facing: 1.0, tilt: 0.0 },
             t: 0.0,
             seed,
@@ -303,13 +321,19 @@ impl Scene {
         }
         // 虫
         for (i, sp) in SPECIES.iter().enumerate() {
-            if !lives_here(sp, spot, hab, month, time) {
+            if !lives_here(sp, spot, hab, month) {
                 continue;
             }
             s.present.push(i);
-            let count = ((sp.rarity * 1.4 * rng.range(0.7, 1.3)).round() as usize).clamp(1, 10);
-            for _ in 0..count {
-                s.spawn(i);
+            if sp.active_at(time) {
+                let count = ((sp.rarity * 1.4 * rng.range(0.7, 1.3)).round() as usize).clamp(1, 10);
+                for _ in 0..count {
+                    s.spawn(i);
+                }
+            } else {
+                // 活動しない時間帯は、休む場所に少しだけ（見つけにくい）
+                let count = ((sp.rarity * 0.6).round() as usize).clamp(1, 4);
+                s.spawn_resting(i, count);
             }
         }
         s
@@ -393,7 +417,102 @@ impl Scene {
             vertical: spd.beh == Beh::Perch && anchor.2,
             anchor,
             airborne: false,
+            rest: None,
         });
+    }
+
+    /// 休んでいる虫を置く
+    fn spawn_resting(&mut self, sp: usize, count: usize) {
+        let rest = SPECIES[sp].rest();
+        let w = self.w;
+        // 巣の虫は巣のまわりに集める
+        let nest = if rest == Rest::Nest {
+            let slug = SPECIES[sp].slug;
+            let kind = match SPECIES[sp].art {
+                Art::Ant => 0,
+                Art::Bee(1) if slug == "asian-giant-hornet" => 0,
+                Art::Bee(1) => 3,
+                Art::Bee(0) if slug == "western-honey-bee" => 2,
+                _ => 1,
+            };
+            let on_tree = matches!(kind, 1 | 3) && !self.trees.is_empty() && !self.has_water();
+            let (x, y) = if on_tree {
+                let k = self.rng.below(self.trees.len() as u32) as usize;
+                let t = &self.trees[k];
+                let side = if self.rng.chance(0.5) { 1.0 } else { -1.0 };
+                let f = self.floor_at(t.x);
+                if kind == 3 { (t.x + side * (t.w * 0.5 + 0.35), f - self.rng.range(2.0, 2.8)) } else { (t.x + side * t.w * 0.2, f - self.rng.range(1.0, 1.8)) }
+            } else {
+                let x = self.rng.range(2.0, w - 2.0);
+                let ground = if self.has_water() { -0.05 } else { self.floor_at(x) + BAND * 0.6 };
+                (x, if kind == 0 { ground } else { ground - 0.25 })
+            };
+            self.nests.push(Nest { x, y, kind: if on_tree || kind == 0 || kind == 2 { kind } else { 1 } });
+            Some((x, y))
+        } else {
+            None
+        };
+        for n in 0..count {
+            let x0 = self.rng.range(2.0, w - 2.0);
+            let len = SPECIES[sp].disp_len();
+            let (x, y, vertical, z) = match rest {
+                Rest::Nest => {
+                    let (nx, ny) = nest.unwrap();
+                    (nx + (n as f32 - 0.5) * len * 0.8, ny - len * 0.15, false, 0.6)
+                }
+                Rest::Trunk | Rest::Roost | Rest::UnderLeaf => {
+                    let a = self.pick_anchor(sp, x0);
+                    if rest == Rest::UnderLeaf {
+                        // 葉の裏：とまり場所の少し下にぶら下がる
+                        (a.0, a.1 + len * 0.3, false, 0.5)
+                    } else {
+                        (a.0, a.1, a.2 && rest == Rest::Trunk, 0.5)
+                    }
+                }
+                Rest::Litter | Rest::Hideout => {
+                    // 木の根元・石のわき
+                    let x = if rest == Rest::Litter && !self.trees.is_empty() {
+                        let t = self.nearest_tree(x0);
+                        t + self.rng.range(-0.6, 0.6)
+                    } else if !self.rocks.is_empty() {
+                        let k = self.rng.below(self.rocks.len() as u32) as usize;
+                        self.rocks[k].x + self.rng.range(-0.3, 0.3)
+                    } else {
+                        x0
+                    };
+                    let z = self.rng.range(0.3, 0.9);
+                    let ground = if self.has_water() { self.floor_at(x) + z * BAND } else { self.floor_at(x) + z * BAND };
+                    (x.clamp(1.0, w - 1.0), ground - len * 0.15, false, z)
+                }
+                Rest::WaterEdge => {
+                    let a = self.pick_anchor(sp, x0);
+                    (a.0, -0.02, false, 0.5)
+                }
+            };
+            let seed = self.rng.next_u32();
+            let facing = if vertical { if x > self.nearest_tree(x) { 1.0 } else { -1.0 } } else if self.rng.chance(0.5) { 1.0 } else { -1.0 };
+            self.creatures.push(Creature {
+                sp,
+                x,
+                y,
+                z,
+                vx: 0.0,
+                vy: 0.0,
+                facing,
+                pitch: if vertical { std::f32::consts::FRAC_PI_2 } else { 0.0 },
+                phase: self.rng.range(0.0, 100.0),
+                seed,
+                tx: x,
+                ty: y,
+                wait: 0.0,
+                flee: 0.0,
+                scale: self.rng.range(0.9, 1.1),
+                vertical,
+                anchor: (x, y, vertical),
+                airborne: false,
+                rest: Some(rest),
+            });
+        }
     }
 
     fn nearest_tree(&self, x: f32) -> f32 {
@@ -506,6 +625,11 @@ impl Scene {
         let w = self.w;
         let water = self.has_water();
         for i in 0..self.creatures.len() {
+            if self.creatures[i].rest.is_some() {
+                // 休んでいる虫は、その場でじっとしている
+                self.creatures[i].phase += dt * 0.2;
+                continue;
+            }
             let sp = self.creatures[i].sp;
             let spd = &SPECIES[sp];
             let x = self.creatures[i].x;
@@ -727,9 +851,14 @@ impl Scene {
             let dcx = ((cx - vcx) / (vw * 0.5)).abs();
             let dcy = ((cy - vcy) / (vh * 0.5)).abs();
             let center_pts = (1.0 - dcx.max(dcy)).max(0.0) * 25.0;
-            let inside = frac * 20.0;
+            // 葉・土・草にかくれている分、写りにくい
+            let hidden = match cr.rest {
+                Some(Rest::UnderLeaf | Rest::Litter | Rest::Hideout | Rest::Nest) => 0.8,
+                _ => 1.0,
+            };
+            let inside = frac * 20.0 * hidden;
             let lit = self.light_at(cx, cy, light);
-            let score = (size_pts + center_pts + inside) * (0.2 + 0.8 * lit.min(1.0).powf(0.7)) * blur;
+            let score = hidden * (size_pts + center_pts + inside) * (0.2 + 0.8 * lit.min(1.0).powf(0.7)) * blur;
             match best.iter_mut().find(|b| b.0 == cr.sp) {
                 Some(b) => b.1 = b.1.max(score),
                 None => best.push((cr.sp, score)),
@@ -765,6 +894,7 @@ impl Scene {
         self.render_trees(g, x0, x1);
         self.render_floor(g, x0, y0, x1, y1, units);
         self.render_plants(g, x0, x1, false);
+        self.render_nests(g, x0, x1);
         // 虫 → カプセル → 手前の草
         let mut order: Vec<(f32, usize)> = self.creatures.iter().enumerate().filter(|(_, c)| c.x > x0 - 2.0 && c.x < x1 + 2.0).map(|(i, c)| (self.depth_key(c), i)).collect();
         order.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
@@ -1165,6 +1295,48 @@ impl Scene {
         }
     }
 
+    /// 巣（地面の穴・木のうろ・巣箱・つり下がった巣）
+    fn render_nests(&self, g: &mut Gfx, x0: f32, x1: f32) {
+        for n in &self.nests {
+            if n.x < x0 - 2.0 || n.x > x1 + 2.0 {
+                continue;
+            }
+            let r = 0.22;
+            match n.kind {
+                0 => {
+                    let (gc, _) = self.ground_cols();
+                    g.circle(n.x, n.y, r * 1.6, 18, c4(mix(gc, [0.4, 0.3, 0.2], 0.3), 1.0));
+                    g.circle(n.x, n.y + 0.02, r * 0.6, 14, [0.06, 0.04, 0.03, 1.0]);
+                }
+                1 => {
+                    if self.trees.iter().any(|t| (t.x - n.x).abs() < t.w) {
+                        g.circle(n.x, n.y, r * 0.8, 16, [0.10, 0.07, 0.05, 1.0]);
+                    } else {
+                        // 切り株
+                        g.rect(n.x - r * 1.6, n.y - r * 0.6, n.x + r * 1.6, n.y + r * 2.0, [0.46, 0.36, 0.26, 1.0]);
+                        g.rect(n.x - r * 1.6, n.y - r * 0.8, n.x + r * 1.6, n.y - r * 0.5, [0.70, 0.58, 0.40, 1.0]);
+                        g.circle(n.x, n.y + r * 0.3, r * 0.5, 14, [0.08, 0.06, 0.04, 1.0]);
+                    }
+                }
+                2 => {
+                    // 巣箱（養蜂の箱）
+                    g.rect(n.x - r * 2.2, n.y - r * 1.6, n.x + r * 2.2, n.y + r * 1.4, [0.80, 0.70, 0.50, 1.0]);
+                    g.rect(n.x - r * 2.5, n.y - r * 1.9, n.x + r * 2.5, n.y - r * 1.5, [0.56, 0.44, 0.30, 1.0]);
+                    g.rect(n.x - r * 0.8, n.y + r * 0.9, n.x + r * 0.8, n.y + r * 1.2, [0.10, 0.08, 0.06, 1.0]);
+                }
+                _ => {
+                    // つり下がった紙の巣（しま模様）
+                    g.line((n.x, n.y - r * 3.2), (n.x, n.y - r * 1.4), 0.03, [0.40, 0.30, 0.20, 1.0]);
+                    for k in 0..5 {
+                        let c = if k % 2 == 0 { [0.70, 0.56, 0.36, 1.0] } else { [0.56, 0.42, 0.26, 1.0] };
+                        g.circle(n.x, n.y - r * (1.0 - k as f32 * 0.35), r * (1.6 - (k as f32 - 2.0).abs() * 0.25), 18, c);
+                    }
+                    g.circle(n.x, n.y + r * 0.7, r * 0.35, 12, [0.08, 0.06, 0.04, 1.0]);
+                }
+            }
+        }
+    }
+
     fn render_creature(&self, g: &mut Gfx, c: &Creature, light: bool, units: &mut Units) {
         let spd = &SPECIES[c.sp];
         let len = spd.disp_len() * c.scale;
@@ -1181,6 +1353,50 @@ impl Scene {
         let drawn = units.creature(g, c.sp, Pose { x, y, len, facing: c.facing, pitch: c.pitch, time: c.phase + (c.seed % 997) as f32 * 0.07, activity });
         if !drawn {
             art::draw(g, c.sp, x, y, len, c.facing, c.pitch, c.phase, 1.0, activity, c.seed);
+        }
+        // 休む場所のかくれみの（葉・土・草）
+        match c.rest {
+            Some(Rest::UnderLeaf) => {
+                let leaf = self.leaf_col(0.2).unwrap_or([0.55, 0.45, 0.25]);
+                let (lx, ly) = (x + len * 0.08 * c.facing, y - len * 0.42);
+                let lc = c4(mix(leaf, [0.0, 0.0, 0.0], 0.1), 0.97);
+                let n = 14;
+                for k in 0..n {
+                    let a0 = k as f32 / n as f32 * std::f32::consts::TAU;
+                    let a1 = (k + 1) as f32 / n as f32 * std::f32::consts::TAU;
+                    g.tri((lx, ly), (lx + a0.cos() * len * 0.62, ly + a0.sin() * len * 0.26), (lx + a1.cos() * len * 0.62, ly + a1.sin() * len * 0.26), lc);
+                }
+                g.line((lx - len * 0.6, ly), (lx + len * 0.6, ly), len * 0.03, c4(mix(leaf, [1.0, 1.0, 1.0], 0.3), 0.8));
+            }
+            Some(Rest::Litter) => {
+                let (gc, _) = self.ground_cols();
+                let top = y - len * 0.02;
+                g.tri((x - len * 0.75, top + len * 0.35), (x + len * 0.75, top + len * 0.35), (x, top - len * 0.08), c4(mix(gc, [0.0, 0.0, 0.0], 0.15), 1.0));
+                g.rect(x - len * 0.75, top + len * 0.2, x + len * 0.75, top + len * 0.4, c4(mix(gc, [0.0, 0.0, 0.0], 0.15), 1.0));
+                for k in 0..4 {
+                    let lx = x + (k as f32 - 1.5) * len * 0.35;
+                    let c = mix([0.62, 0.42, 0.20], [0.42, 0.30, 0.16], k as f32 / 3.0);
+                    g.tri((lx - len * 0.2, top + len * 0.1), (lx + len * 0.2, top + len * 0.04), (lx, top + len * 0.2), c4(c, 1.0));
+                }
+            }
+            Some(Rest::Hideout) => {
+                let base = y + len * 0.3;
+                for k in 0..5 {
+                    let dx = (k as f32 - 2.0) * len * 0.22;
+                    let col = if k % 2 == 0 { [0.30, 0.50, 0.22, 1.0] } else { [0.40, 0.58, 0.26, 1.0] };
+                    g.tri((x + dx - len * 0.06, base), (x + dx + len * 0.06, base), (x + dx * 1.6, base - len * (0.55 + (k % 2) as f32 * 0.15)), col);
+                }
+            }
+            Some(Rest::Nest) => {
+                // 巣の入り口の縁を手前に
+                if let Some(nest) = self.nests.iter().find(|n| (n.x - c.x).abs() < len * 1.5 && (n.y - c.y).abs() < len) {
+                    if nest.kind == 0 {
+                        let (gc, _) = self.ground_cols();
+                        g.rect(nest.x - len * 0.9, nest.y + len * 0.05, nest.x + len * 0.9, nest.y + len * 0.25, c4(mix(gc, [0.0, 0.0, 0.0], 0.2), 1.0));
+                    }
+                }
+            }
+            _ => {}
         }
         // ホタルの光（暗いほど目立つ）
         if spd.art == crate::life::Art::Firefly && !light {
@@ -1271,7 +1487,6 @@ mod tests {
         for (s, spot) in SPOTS.iter().enumerate() {
             for &h in spot.habs {
                 let mut sc = Scene::new(s, h, [7, 1, 4, 10][s % 4], (s % 4) as u8, 7 + s as u32);
-                assert!(!sc.present.is_empty() || sc.month != 7 || sc.time != 1);
                 for _ in 0..400 {
                     sc.update(1.0 / 30.0, 0.6, 0.1, None, true);
                 }
@@ -1279,6 +1494,23 @@ mod tests {
                 for c in &sc.creatures {
                     assert!(c.x.is_finite() && c.y.is_finite(), "{}", SPECIES[c.sp].slug);
                     assert!(c.y > sc.top() - 1.0 && c.y < sc.floor_at(c.x) + BAND + 0.5, "{} at {}", SPECIES[c.sp].slug, c.y);
+                }
+            }
+        }
+    }
+
+    /// どの場面にも、季節の中ならどの時間帯にも虫がいる
+    #[test]
+    fn no_time_of_day_is_empty() {
+        for (s, spot) in SPOTS.iter().enumerate() {
+            for &h in spot.habs {
+                for month in [5u8, 7, 9] {
+                    for time in 0..4u8 {
+                        let sc = Scene::new(s, h, month, time, 3);
+                        assert!(!sc.creatures.is_empty(), "{} {:?} month {} time {}", spot.name.0, h, month, time);
+                        let any_month = Scene::new(s, h, month, 1, 3);
+                        assert_eq!(sc.present, any_month.present, "time must not change who lives here");
+                    }
                 }
             }
         }

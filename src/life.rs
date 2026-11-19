@@ -142,6 +142,39 @@ pub struct Species {
     pub fact: L,
 }
 
+/// 活動しない時間帯に休んでいる場所
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Rest {
+    /// 葉の裏や草のかげで、はねを閉じて休む（チョウ・テントウムシ・ホタル）
+    UnderLeaf,
+    /// 草の茎や小枝の先にとまって休む（トンボ・バッタ・カマキリ）
+    Roost,
+    /// 木の幹や枝にとまったまま（セミ・カミキリ）
+    Trunk,
+    /// 木の根元の落ち葉や土の中にもぐる（カブトムシ・クワガタ）
+    Litter,
+    /// 草の根元や石のかげにひそむ（コオロギ）
+    Hideout,
+    /// 巣の中・巣の入り口（ハチ・アリ）
+    Nest,
+    /// 岸の草や浮き葉のかげ（アメンボ）
+    WaterEdge,
+}
+
+impl Rest {
+    pub fn text(self) -> &'static str {
+        match self {
+            Rest::UnderLeaf => t!("葉の裏や草のかげで、はねを閉じてじっと休んでいる", "resting with wings closed under leaves or in the grass", "合着翅膀在叶子背面或草丛阴影里静静休息"),
+            Rest::Roost => t!("草の茎や小枝の先にとまって、じっと休んでいる", "resting still on grass stems or twig tips", "停在草茎或小树枝尖上静静休息"),
+            Rest::Trunk => t!("木の幹や枝にとまったまま、じっとしている", "staying still on tree trunks and branches", "停在树干或树枝上一动不动"),
+            Rest::Litter => t!("木の根元の落ち葉や土の中にもぐっている", "burrowed into fallen leaves or soil at the foot of trees", "钻进树根旁的落叶或土里"),
+            Rest::Hideout => t!("草の根元や石のかげにひそんでいる", "hiding at the base of plants or behind stones", "躲在草根或石头后面"),
+            Rest::Nest => t!("巣の中や、巣の入り口で休んでいる", "resting in or at the entrance of the nest", "在巢里或巢口休息"),
+            Rest::WaterEdge => t!("岸の草や浮き葉のかげで休んでいる", "resting among bank plants and floating leaves", "在岸边的草或浮叶阴影里休息"),
+        }
+    }
+}
+
 /// 時間帯 0=早朝 1=昼 2=夕方 3=夜（bit で組み合わせる）
 pub const DAWN: u8 = 1;
 pub const DAY: u8 = 2;
@@ -205,6 +238,22 @@ impl Species {
             (a..=b).contains(&month)
         } else {
             month >= a || month <= b
+        }
+    }
+
+    /// 活動しない時間帯に休んでいる場所
+    pub fn rest(&self) -> Rest {
+        if self.slug == "winter-moth" {
+            return Rest::Trunk;
+        }
+        match self.art {
+            Art::Butterfly(_) | Art::Ladybug | Art::Firefly | Art::StinkBug => Rest::UnderLeaf,
+            Art::Dragonfly(_) | Art::Mantis(_) | Art::Hopper(0) | Art::Hopper(1) | Art::Hopper(2) => Rest::Roost,
+            Art::Longhorn | Art::Jewel | Art::Cicada(_) | Art::Stick => Rest::Trunk,
+            Art::Scarab(_) | Art::Stag(_) | Art::TigerBeetle => Rest::Litter,
+            Art::Hopper(_) | Art::Earwig | Art::DivingBeetle | Art::WaterBug(_) => Rest::Hideout,
+            Art::Bee(_) | Art::Ant => Rest::Nest,
+            Art::Strider => Rest::WaterEdge,
         }
     }
 
@@ -533,8 +582,9 @@ pub fn n_entries() -> usize {
 }
 
 /// その月に、そのスポットのその場面にいるか
-pub fn lives_here(sp: &Species, spot: usize, hab: Habitat, month: u8, time: u8) -> bool {
-    sp.in_season(month) && sp.active_at(time) && lives_at(sp, spot, hab)
+/// 活動していない時間帯でも、休んでいる場所にいる（見つけにくいだけ）
+pub fn lives_here(sp: &Species, spot: usize, hab: Habitat, month: u8) -> bool {
+    sp.in_season(month) && lives_at(sp, spot, hab)
 }
 
 /// 季節を問わず、そのスポットのその場面にすむか
@@ -558,19 +608,13 @@ pub fn places_of(i: usize) -> Vec<(usize, Habitat)> {
 
 /// その虫に会いに行くスポット・場面・月。いまの月に見られればそのまま、見られなければいちばん近い月へ。
 /// 場所は near（経緯度）からいちばん近いところ
-pub fn where_is(i: usize, near: (f32, f32), month: u8, time: u8) -> (usize, Habitat, u8, u8) {
+pub fn where_is(i: usize, near: (f32, f32), month: u8) -> (usize, Habitat, u8) {
     let sp = &SPECIES[i];
     let month = (0..12u8)
         .flat_map(|d| [month as i32 + d as i32, month as i32 - d as i32])
         .map(|m| (m - 1).rem_euclid(12) as u8 + 1)
         .find(|&m| sp.in_season(m))
         .unwrap_or(month);
-    // 時間帯も、いまの時間帯にいなければいちばん近い時間帯へ
-    let time = [0i32, 1, -1, 2, -2]
-        .iter()
-        .map(|d| (time as i32 + d).rem_euclid(4) as u8)
-        .find(|&t| sp.active_at(t))
-        .unwrap_or(time);
     let (s, h) = places_of(i)
         .into_iter()
         .min_by(|a, b| {
@@ -579,7 +623,7 @@ pub fn where_is(i: usize, near: (f32, f32), month: u8, time: u8) -> (usize, Habi
             da.partial_cmp(&db).unwrap()
         })
         .unwrap_or((0, Habitat::Forest));
-    (s, h, month, time)
+    (s, h, month)
 }
 
 /// 図鑑の項目のタブ
@@ -622,11 +666,8 @@ mod tests {
         let moth = SPECIES.iter().find(|s| s.slug == "winter-moth").unwrap();
         assert!(moth.in_season(12) && moth.in_season(1) && !moth.in_season(7));
         let i = SPECIES.iter().position(|s| s.slug == "japanese-rhinoceros-beetle").unwrap();
-        assert_eq!(where_is(i, (139.7, 35.7), 12, 3).2, 8);
-        assert_eq!(where_is(i, (139.7, 35.7), 7, 3).2, 7);
-        // カブトムシは昼にはいないので、近い時間帯へ
-        let w = where_is(i, (139.7, 35.7), 7, 1);
-        assert!(SPECIES[i].active_at(w.3) && w.3 != 1);
+        assert_eq!(where_is(i, (139.7, 35.7), 12).2, 8);
+        assert_eq!(where_is(i, (139.7, 35.7), 7).2, 7);
         for t in 0..4u8 {
             assert!(SPECIES.iter().filter(|s| s.active_at(t) && s.in_season(7)).count() >= 8, "time {}", t);
         }
@@ -652,7 +693,7 @@ mod tests {
     fn every_spot_scene_has_insects() {
         for (s, spot) in SPOTS.iter().enumerate() {
             for &h in spot.habs {
-                let n = SPECIES.iter().filter(|sp| lives_here(sp, s, h, 7, 1)).count();
+                let n = SPECIES.iter().filter(|sp| lives_here(sp, s, h, 7)).count();
                 assert!(n >= 3, "{} {:?} has only {} in July", spot.name.0, h, n);
             }
         }

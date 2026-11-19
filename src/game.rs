@@ -1365,13 +1365,14 @@ impl Game {
     fn goto(&mut self, tg: Target) {
         let Target::Sp(i) = tg;
         let near = map_to_lonlat(self.cap.0, self.cap.1);
-        let (s, h, m, t) = where_is(i, near, self.prog.month, self.prog.time);
+        let (s, h, m) = where_is(i, near, self.prog.month);
         self.fly_to_spot(s, Some(h));
         if m != self.prog.month {
             self.set_month(m);
         }
-        if t != self.prog.time {
-            self.set_time(t);
+        // 時間帯は変えない。活動しない時間なら、休んでいる場所を知らせる
+        if !SPECIES[i].active_at(self.prog.time) {
+            self.notify_text(tf!("{}の{}は、{}（見つけにくい）", "In the {1}, the {0} is {2} (hard to spot)", "{1}的{0}{2}（不容易找到）", SPECIES[i].name.get(), time_name(self.prog.time), SPECIES[i].rest().text()));
         }
         if self.cap_target.is_none() {
             self.notify_text(tf!("ここの「{}」で会えるよ", "You can find it in the {} here", "在这里的{}能遇到", h.name()));
@@ -1856,15 +1857,17 @@ impl Game {
         self.add_button(x1 - 44.0, y0 + 6.0, x1 - 8.0, y0 + 32.0, "×", Act::RadarOff, true, false);
         let month = self.prog.month;
         let time = self.prog.time;
-        let here = self.at_spot().filter(|&s| SPOTS[s].habs.iter().any(|&h| lives_here(&SPECIES[e], s, h, month, time)));
-        let (line, go) = if SPECIES[e].in_season(month) && !SPECIES[e].active_at(time) {
-            (tf!("{}にはいない。{}に見られる", "Not about in the {}. Seen: {}", "{}看不到。{}能看到", time_name(time), times_text(SPECIES[e].times)), Some(t!("その時間へ行く", "Go to that time", "前往那个时间")))
-        } else if !SPECIES[e].in_season(month) {
+        let here = self.at_spot().filter(|&s| SPOTS[s].habs.iter().any(|&h| lives_here(&SPECIES[e], s, h, month)));
+        if SPECIES[e].in_season(month) && !SPECIES[e].active_at(time) {
+            let rest = tf!("{}は休み中：{}", "Resting in the {}: {}", "{}在休息：{}", time_name(time), SPECIES[e].rest().text());
+            self.gfx.text(&rest, x0 + 12.0, y0 + 64.0, cw - 24.0, 32.0, Font::Small, GOLD);
+        }
+        let (line, go) = if !SPECIES[e].in_season(month) {
             (tf!("{}にはいない。{}に見られる", "Not around in {}. Seen {}", "{}看不到。{}能看到", month_name(month), months_text(SPECIES[e].months)), Some(t!("その季節へ行く", "Go to its season", "前往那个季节")))
         } else if self.cap_target.is_some() {
             (t!("移動中…　着いたら降りよう（Enter）", "On the way… land when you arrive (Enter)", "移动中…　到达后降落（Enter）").to_string(), None)
         } else if let Some(s) = here {
-            let hs: Vec<&str> = SPOTS[s].habs.iter().filter(|&&h| lives_here(&SPECIES[e], s, h, month, time)).map(|h| h.name()).collect();
+            let hs: Vec<&str> = SPOTS[s].habs.iter().filter(|&&h| lives_here(&SPECIES[e], s, h, month)).map(|h| h.name()).collect();
             (tf!("ここの「{}」にいる！", "Here, in the {}!", "就在这里的{}！", hs.join(lang::sep())), None)
         } else {
             (tf!("光っているスポットにいる（{}か所）", "Found at the glowing spots ({})", "在发光的观察点（{}处）", self.radar_cells.len()), Some(t!("いちばん近い所へ", "Go to the nearest", "前往最近处")))
@@ -2416,7 +2419,7 @@ impl Game {
                 let mut sections = crate::guide::sections(e, lang::lang());
                 let metadata = format!("{} / {}・{}\n{}: {}\n{}: {}\n{}: {}\n{}: {}\n\n",
                     sp.sci, sp.group.order(), sp.family.get(),
-                    t!("季節", "Season", "季节"), format!("{}　{}: {}", months_text(sp.months), t!("時間帯", "Time", "时间段"), times_text(sp.times)),
+                    t!("季節", "Season", "季节"), format!("{}　{}: {}\n{}: {}", months_text(sp.months), t!("時間帯", "Time", "时间段"), times_text(sp.times), t!("休むとき", "When resting", "休息时"), sp.rest().text()),
                     t!("すみか", "Habitat", "栖息地"), hab_text(sp),
                     t!("会える場所", "Where", "地点"), place_text(e),
                     t!("大きさ", "Size", "大小"), size_text(sp.len_cm));
@@ -2440,6 +2443,7 @@ impl Game {
             for (label, value) in [
                 (t!("季節", "Season", "季节"), months_text(sp.months)),
                 (t!("時間帯", "Time", "时间段"), times_text(sp.times)),
+                (t!("休むとき", "When resting", "休息时"), sp.rest().text().to_string()),
                 (t!("すみか", "Habitat", "栖息地"), hab_text(sp)),
                 (t!("会える場所", "Where", "地点"), place_text(e)),
             ] {
@@ -3000,9 +3004,9 @@ mod tests {
     fn time_of_day_changes_the_insects_and_is_saved() {
         let mut g = started();
         let kabuto = species_index("japanese-rhinoceros-beetle");
-        g.prog.time = 1;
+        g.prog.time = 3;
         g.goto(Target::Sp(kabuto));
-        assert!(SPECIES[kabuto].active_at(g.prog.time), "goto moves to an active time");
+        assert_eq!(g.prog.time, 3, "goto keeps the chosen time of day");
         for _ in 0..400 {
             g.update(0.1);
         }
@@ -3013,8 +3017,11 @@ mod tests {
         assert_eq!(g.screen, Screen::Map);
         g.enter_dive(h);
         let sc = g.scene.as_ref().unwrap();
-        assert!(!sc.present.contains(&kabuto));
-        assert!(sc.present.iter().all(|&i| SPECIES[i].active_at(1)));
+        // 昼のカブトムシは、木の根元の落ち葉や土の中で休んでいる
+        assert!(sc.present.contains(&kabuto));
+        let resting: Vec<_> = sc.creatures.iter().filter(|c| c.sp == kabuto).collect();
+        assert!(!resting.is_empty() && resting.iter().all(|c| c.rest == Some(Rest::Litter)));
+        assert!(sc.creatures.iter().all(|c| c.rest.is_some() != SPECIES[c.sp].active_at(1)));
         // 夜は暗く、ライトで明るくなる
         g.do_act(Act::TimeOfDay(3));
         g.enter_dive(h);
@@ -3026,6 +3033,29 @@ mod tests {
         g.do_act(Act::Surface);
         g.render();
         assert_eq!(g.buttons.iter().filter(|b| matches!(b.act, Act::TimeOfDay(_))).count(), 4);
+    }
+
+    /// 活動しない時間帯でも、休んでいる場所で見つけて撮影できる
+    #[test]
+    fn every_insect_can_be_photographed_while_resting() {
+        let mut g = started();
+        for sp in 0..n_species() {
+            let Some(t) = (0..4u8).find(|&t| !SPECIES[sp].active_at(t)) else { continue };
+            g.close_photo();
+            g.prog.time = t;
+            g.goto(Target::Sp(sp));
+            for _ in 0..400 {
+                g.update(0.1);
+            }
+            let h = g.pending_hab.unwrap();
+            g.enter_dive(h);
+            assert!(g.scene.as_ref().unwrap().creatures.iter().any(|c| c.sp == sp && c.rest.is_some()), "{} not resting", SPECIES[sp].slug);
+            frame_subject(&mut g, sp);
+            g.shoot();
+            assert_eq!(g.prog.stars[sp], 1, "could not photograph resting {}", SPECIES[sp].slug);
+            g.close_photo();
+            g.do_act(Act::Surface);
+        }
     }
 
     #[test]
