@@ -43,7 +43,7 @@ pub fn sections(e: usize, language: Lang) -> Vec<Section> {
     result.push(Section {
         title: "関東で会うには",
         body: format!(
-            "{}{}\n{}{}\n{}{}\n{}{}\n\n{}",
+            "{}{}\n{}{}\n{}{}\n{}{}\n{}{}\n\n{}",
             ja("成虫が見られる季節："),
             {
                 let (a, b) = sp.months;
@@ -63,6 +63,32 @@ pub fn sections(e: usize, language: Lang) -> Vec<Section> {
                 life::Rest::Hideout => ja("草の根元や石のかげにひそんでいる"),
                 life::Rest::Nest => ja("巣の中や、巣の入り口で休んでいる"),
                 life::Rest::WaterEdge => ja("岸の草や浮き葉のかげで休んでいる"),
+            },
+            ja("冬越し："),
+            match sp.winter() {
+                None => ja("関東では冬を越せず、毎年、南の国から海をわたって飛んでくる").to_string(),
+                Some((stage, site)) => {
+                    let st = match stage {
+                        life::Stage::Egg => ja("たまご"),
+                        life::Stage::EggCase => ja("たまごのかたまり（卵のう）"),
+                        life::Stage::Yago => ja("幼虫（ヤゴ）"),
+                        life::Stage::Chrysalis | life::Stage::Cocoon => ja("さなぎ"),
+                        life::Stage::Adult => ja("成虫"),
+                        _ => ja("幼虫"),
+                    };
+                    let si = match site {
+                        life::Site::Soil => ja("土の中"),
+                        life::Site::Litter => ja("落ち葉の下"),
+                        life::Site::DeadWood => ja("朽ち木や枯れ木の中"),
+                        life::Site::Stem => ja("草の茎や枝"),
+                        life::Site::Bark => ja("木の幹や樹皮のすきま"),
+                        life::Site::WaterBottom => ja("水の底"),
+                        life::Site::Nest => ja("巣の中"),
+                        life::Site::UnderStone => ja("石の下"),
+                        life::Site::Bank => ja("水辺の岸の落ち葉や草の根元"),
+                    };
+                    format!("{}で、{}{}", st, si, ja("ですごす。成虫が見られない季節も、そこをさがせば見つかる"))
+                }
             },
             ja("このゲームでは、次の場所で会えます："),
             names.join("、"),

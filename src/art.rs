@@ -4,7 +4,7 @@
 //! `Pen` が場面（または画面）の座標に移す。y は下向きが正。絵の中心（u=0, v=0）を (x, y) に置く。
 
 use crate::gfx::Gfx;
-use crate::life::{Art, SPECIES};
+use crate::life::{Art, Stage, SPECIES};
 use std::f32::consts::{PI, TAU};
 
 #[derive(Clone, Copy)]
@@ -190,6 +190,152 @@ pub fn draw(g: &mut Gfx, sp: usize, x: f32, y: f32, len: f32, facing: f32, pitch
         Art::Bee(k) => bee(g, &pen, k, c, c2, t),
         Art::Ant => ant(g, &pen, c, c2, t, activity),
         Art::Earwig => earwig(g, &pen, c, c2, t, activity),
+    }
+}
+
+// ---------------------------------------------------------------- 冬越しの姿（たまご・幼虫・さなぎ）
+
+/// 冬越しの姿の絵の大きさ（体長に対する幅・高さ）
+pub fn stage_extent(sp: usize, stage: Stage) -> (f32, f32) {
+    match stage {
+        Stage::Adult => extent(sp),
+        Stage::Egg => (0.8, 0.4),
+        Stage::EggCase => (0.95, 0.62),
+        Stage::Caterpillar => (1.15, 0.4),
+        Stage::Grub => (0.95, 0.75),
+        Stage::Borer => (1.15, 0.32),
+        Stage::Yago => (1.25, 0.55),
+        Stage::CicadaNymph => (1.05, 0.65),
+        Stage::FireflyLarva => (1.15, 0.32),
+        Stage::BugNymph => (1.0, 0.62),
+        Stage::Chrysalis => (0.95, 0.5),
+        Stage::Cocoon => (0.95, 0.55),
+    }
+}
+
+/// 冬越しの姿を描く。(x, y) は絵の中心
+#[allow(clippy::too_many_arguments)]
+pub fn draw_stage(g: &mut Gfx, sp: usize, stage: Stage, x: f32, y: f32, len: f32, facing: f32, pitch: f32, t: f32, a: f32, seed: u32) {
+    if stage == Stage::Adult {
+        draw(g, sp, x, y, len, facing, pitch, t, a, 0.0, seed);
+        return;
+    }
+    let s = &SPECIES[sp];
+    let pen = Pen { x, y, s: len, fx: if facing < 0.0 { -1.0 } else { 1.0 }, rot: pitch, a };
+    let breathe = (t * 1.5).sin() * 0.01;
+    match stage {
+        Stage::Egg => {
+            let c = mix([0.95, 0.90, 0.72], s.col, 0.15);
+            for k in 0..8 {
+                let u = -0.3 + (k % 4) as f32 * 0.2 + if k >= 4 { 0.1 } else { 0.0 };
+                let v = if k >= 4 { 0.08 } else { -0.08 };
+                ell(g, &pen, u, v, 0.075, 0.1, 0.3, c, 1.0);
+                circ(g, &pen, u - 0.02, v + 0.04, 0.02, WHITE, 0.7);
+            }
+        }
+        Stage::EggCase => {
+            let c = [0.80, 0.70, 0.52];
+            ell(g, &pen, 0.0, 0.0, 0.46, 0.28, 0.0, c, 1.0);
+            for k in 0..6 {
+                let u = -0.35 + k as f32 * 0.14;
+                seg(g, &pen, u, -0.22, u + 0.04, 0.24, 0.025, mul(c, 0.8), 0.9);
+            }
+            ell(g, &pen, 0.0, 0.18, 0.36, 0.06, 0.0, mix(c, WHITE, 0.3), 0.7);
+        }
+        Stage::Caterpillar => {
+            let c = mix(s.col, [0.40, 0.62, 0.26], 0.6);
+            for k in 0..9 {
+                let u = -0.48 + k as f32 * 0.11;
+                let v = (t * 2.0 + k as f32 * 0.8).sin() * 0.012;
+                ell(g, &pen, u, v, 0.075, 0.12, 0.0, if k % 2 == 0 { c } else { mul(c, 0.9) }, 1.0);
+                seg(g, &pen, u, -0.1, u, -0.16, 0.02, mul(c, 0.6), 1.0);
+            }
+            circ(g, &pen, 0.5, 0.02, 0.08, mul(c, 0.75), 1.0);
+            if s.slug == "great-purple-emperor" || s.slug == "hestina-persimilis" || s.slug == "red-ring-skirt" {
+                // オオムラサキの幼虫の頭の角
+                seg(g, &pen, 0.5, 0.06, 0.58, 0.2, 0.02, mul(c, 0.7), 1.0);
+                seg(g, &pen, 0.48, 0.06, 0.5, 0.21, 0.02, mul(c, 0.7), 1.0);
+            }
+            for k in 0..4 {
+                circ(g, &pen, -0.3 + k as f32 * 0.2, 0.06, 0.02, mix(s.col2, WHITE, 0.4), 0.8);
+            }
+        }
+        Stage::Grub => {
+            // C の字に丸まった白い幼虫
+            let c = [0.94, 0.90, 0.80];
+            for k in 0..10 {
+                let th = PI * 0.15 + k as f32 / 9.0 * PI * 1.25;
+                let r = 0.24;
+                let w = 0.13 - k as f32 * 0.004;
+                ell(g, &pen, th.cos() * r, th.sin() * r + breathe, w, w, 0.0, if k % 2 == 0 { c } else { mul(c, 0.94) }, 1.0);
+            }
+            circ(g, &pen, (PI * 0.15f32).cos() * 0.24 + 0.05, (PI * 0.15f32).sin() * 0.24, 0.1, [0.62, 0.40, 0.20], 1.0);
+            for k in 0..3 {
+                seg(g, &pen, 0.05 + k as f32 * 0.04, 0.0, 0.0 + k as f32 * 0.05, -0.1, 0.02, [0.62, 0.40, 0.20], 1.0);
+            }
+        }
+        Stage::Borer => {
+            let c = [0.95, 0.92, 0.82];
+            for k in 0..9 {
+                let u = -0.46 + k as f32 * 0.1;
+                ell(g, &pen, u, breathe, 0.065, 0.1 - (k as f32 - 6.0).max(0.0) * 0.005, 0.0, if k % 2 == 0 { c } else { mul(c, 0.95) }, 1.0);
+            }
+            ell(g, &pen, 0.46, 0.0, 0.09, 0.11, 0.0, [0.92, 0.80, 0.50], 1.0);
+            circ(g, &pen, 0.53, 0.0, 0.035, [0.30, 0.20, 0.12], 1.0);
+        }
+        Stage::Yago => {
+            let c = [0.42, 0.38, 0.26];
+            legs(g, &pen, [0.15, 0.05, -0.05], -0.02, -0.24, 0.2, t, 0.3, 0.025, mul(c, 0.8));
+            ell(g, &pen, -0.22, 0.0, 0.34, 0.13, 0.0, c, 1.0);
+            ell(g, &pen, 0.12, 0.02, 0.14, 0.11, 0.0, mul(c, 1.1), 1.0);
+            ell(g, &pen, 0.04, 0.12, 0.14, 0.04, 0.15, mul(c, 0.8), 1.0);
+            circ(g, &pen, 0.3, 0.04, 0.09, mul(c, 1.05), 1.0);
+            circ(g, &pen, 0.34, 0.08, 0.045, [0.15, 0.15, 0.10], 1.0);
+        }
+        Stage::CicadaNymph => {
+            let c = [0.66, 0.50, 0.30];
+            legs(g, &pen, [0.12, 0.02, -0.08], -0.04, -0.28, 0.1, t, 0.0, 0.03, mul(c, 0.8));
+            path(g, &pen, &[(0.22, 0.0), (0.38, -0.12), (0.46, -0.04)], 0.06, mul(c, 0.9), 1.0);
+            ell(g, &pen, -0.15, 0.02, 0.32, 0.2, 0.0, c, 1.0);
+            ell(g, &pen, 0.18, 0.06, 0.16, 0.17, 0.0, mul(c, 1.1), 1.0);
+            ell(g, &pen, 0.0, 0.16, 0.16, 0.05, 0.1, mul(c, 0.8), 1.0);
+            circ(g, &pen, 0.32, 0.06, 0.06, [0.85, 0.80, 0.70], 1.0);
+        }
+        Stage::FireflyLarva => {
+            let c = [0.18, 0.16, 0.14];
+            for k in 0..9 {
+                let u = -0.46 + k as f32 * 0.1;
+                ell(g, &pen, u, 0.0, 0.065, 0.1, 0.0, if k % 2 == 0 { c } else { mul(c, 1.3) }, 1.0);
+                circ(g, &pen, u, 0.05, 0.02, [0.85, 0.75, 0.55], 0.8);
+            }
+            circ(g, &pen, 0.48, 0.0, 0.05, [0.30, 0.25, 0.20], 1.0);
+            let glow = 0.4 + 0.3 * (t * 1.8).sin();
+            circ(g, &pen, -0.46, 0.0, 0.05, [0.85, 1.0, 0.45], glow);
+        }
+        Stage::BugNymph => {
+            legs(g, &pen, [0.12, 0.0, -0.12], -0.04, -0.24, 0.1, t, 0.0, 0.02, INK);
+            ell(g, &pen, 0.0, 0.04, 0.34, 0.2, 0.0, mix(s.col, [0.5, 0.4, 0.3], 0.4), 1.0);
+            for k in 0..3 {
+                circ(g, &pen, -0.18 + k as f32 * 0.16, 0.1, 0.04, s.col2, 1.0);
+            }
+            circ(g, &pen, 0.34, 0.02, 0.07, s.col2, 1.0);
+        }
+        Stage::Chrysalis => {
+            // チョウのさなぎ（角ばった形と、体を支える糸）
+            let c = if (s.col[1] > 0.6) || s.slug.contains("swallowtail") { [0.62, 0.70, 0.40] } else { [0.58, 0.48, 0.34] };
+            poly(g, &pen, &[(-0.44, 0.0), (-0.2, 0.16), (0.1, 0.2), (0.3, 0.12), (0.44, 0.18), (0.42, 0.0), (0.3, -0.12), (-0.1, -0.16)], c, 1.0);
+            seg(g, &pen, -0.3, 0.06, 0.3, 0.1, 0.015, mul(c, 0.75), 0.8);
+            seg(g, &pen, 0.05, 0.2, -0.1, 0.32, 0.01, WHITE, 0.6);
+        }
+        Stage::Cocoon => {
+            let c = if s.slug == "winter-moth" { [0.42, 0.30, 0.20] } else { [0.70, 0.62, 0.44] };
+            ell(g, &pen, 0.0, 0.0, 0.44, 0.24, 0.0, c, 1.0);
+            for k in 0..5 {
+                let u = -0.32 + k as f32 * 0.16;
+                seg(g, &pen, u, -0.2, u + 0.06, 0.2, 0.012, mix(c, WHITE, 0.25), 0.7);
+            }
+        }
+        Stage::Adult => {}
     }
 }
 
@@ -737,6 +883,23 @@ fn earwig(g: &mut Gfx, pen: &Pen, c: [f32; 3], c2: [f32; 3], t: f32, activity: f
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 冬越しの姿の絵も、有限で枠に収まる
+    #[test]
+    fn stage_art_fits() {
+        let mut g = Gfx::new(800, 600);
+        for sp in 0..SPECIES.len() {
+            let Some((stage, _)) = SPECIES[sp].winter() else { continue };
+            g.verts.clear();
+            draw_stage(&mut g, sp, stage, 0.0, 0.0, 1.0, 1.0, 0.0, 0.37, 1.0, 3);
+            assert!(!g.verts.is_empty());
+            let (w, h) = stage_extent(sp, stage);
+            for v in &g.verts {
+                assert!(v.x.is_finite() && v.y.is_finite());
+                assert!(v.x.abs() <= w * 0.5 + 0.12 && v.y.abs() <= h * 0.5 + 0.12, "{} {:?} at {},{} outside {}x{}", SPECIES[sp].slug, stage, v.x, v.y, w, h);
+            }
+        }
+    }
 
     /// 手描きの絵が有限で、図鑑の枠（extent）にだいたい収まる
     #[test]

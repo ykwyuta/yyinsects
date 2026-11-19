@@ -43,6 +43,8 @@ pub struct Creature {
     pub airborne: bool,
     /// 活動しない時間帯で、休んでいる（Some なら休む場所）
     pub rest: Option<Rest>,
+    /// 成虫の季節でなく、冬越しの姿で越冬場所にいる
+    pub winter: Option<(Stage, Site)>,
 }
 
 /// 巣（休んでいるハチ・アリのいるところ）
@@ -56,7 +58,7 @@ pub struct Nest {
 impl Creature {
     /// 動いている度合い（0〜1）。はばたき・脚の動き
     pub fn activity(&self) -> f32 {
-        if self.rest.is_some() {
+        if self.rest.is_some() || self.winter.is_some() {
             return 0.0;
         }
         let beh = SPECIES[self.sp].beh;
@@ -69,7 +71,7 @@ impl Creature {
     /// 絵の中心
     pub fn center(&self) -> (f32, f32) {
         let sp = &SPECIES[self.sp];
-        if self.rest.is_some() {
+        if self.rest.is_some() || self.winter.is_some() {
             return (self.x, self.y);
         }
         if sp.beh.grounded() && !self.airborne {
@@ -79,9 +81,20 @@ impl Creature {
         }
     }
 
+    /// 絵の大きさ（体長）
+    pub fn len(&self) -> f32 {
+        SPECIES[self.sp].disp_len() * self.scale * self.winter.map_or(1.0, |(st, _)| st.scale())
+    }
+
     pub fn bounds(&self) -> [f32; 4] {
         let (cx, cy) = self.center();
-        units::bounds(self.sp, cx, cy, SPECIES[self.sp].disp_len() * self.scale, self.vertical)
+        if let Some((stage, _)) = self.winter.filter(|w| w.0 != Stage::Adult) {
+            let (w, h) = art::stage_extent(self.sp, stage);
+            let l = self.len();
+            let (w, h) = if self.vertical { (h * l, w * l) } else { (w * l, h * l) };
+            return [cx - w * 0.5, cy - h * 0.5, cx + w * 0.5, cy + h * 0.5];
+        }
+        units::bounds(self.sp, cx, cy, self.len(), self.vertical)
     }
 }
 
@@ -140,6 +153,8 @@ pub struct Scene {
     pub trees: Vec<Tree>,
     pub plants: Vec<Plant>,
     pub nests: Vec<Nest>,
+    /// 朽ち木（地面に横たわる木。x と長さの半分）
+    pub logs: Vec<(f32, f32)>,
     pub cap: Capsule,
     pub t: f32,
     pub seed: u32,
@@ -188,6 +203,8 @@ fn c4(c: [f32; 3], a: f32) -> [f32; 4] {
 /// 写真に写った虫（種類、点数）
 pub struct ShotResult {
     pub subjects: Vec<(usize, f32)>,
+    /// 写った姿（冬越しの姿なら Some。subjects と同じ順）
+    pub stages: Vec<Option<Stage>>,
 }
 
 /// 図鑑に収録できる写りなら 1、そうでなければ 0
@@ -233,6 +250,7 @@ impl Scene {
             trees: Vec::new(),
             plants: Vec::new(),
             nests: Vec::new(),
+            logs: Vec::new(),
             cap: Capsule { x: w * 0.5, y: if water { -0.9 } else { -1.3 }, vx: 0.0, vy: 0.0, facing: 1.0, tilt: 0.0 },
             t: 0.0,
             seed,
@@ -325,7 +343,12 @@ impl Scene {
                 continue;
             }
             s.present.push(i);
-            if sp.active_at(time) {
+            if !sp.in_season(month) {
+                // 成虫の季節でなければ、冬越しの姿で越冬場所に
+                let (stage, site) = sp.winter().unwrap();
+                let count = ((sp.rarity * 0.5).round() as usize).clamp(1, 3);
+                s.spawn_wintering(i, stage, site, count);
+            } else if sp.active_at(time) {
                 let count = ((sp.rarity * 1.4 * rng.range(0.7, 1.3)).round() as usize).clamp(1, 10);
                 for _ in 0..count {
                     s.spawn(i);
@@ -418,7 +441,105 @@ impl Scene {
             anchor,
             airborne: false,
             rest: None,
+            winter: None,
         });
+    }
+
+    /// 冬越しの姿の虫を置く
+    fn spawn_wintering(&mut self, sp: usize, stage: Stage, site: Site, count: usize) {
+        if site == Site::Nest {
+            let start = self.creatures.len();
+            self.spawn_resting(sp, count);
+            for c in &mut self.creatures[start..] {
+                c.rest = None;
+                c.winter = Some((stage, site));
+            }
+            return;
+        }
+        let w = self.w;
+        let len = SPECIES[sp].disp_len() * stage.scale();
+        if site == Site::DeadWood && self.logs.len() < 2 {
+            let x = self.rng.range(3.0, w - 3.0);
+            let half = self.rng.range(0.9, 1.4);
+            self.logs.push((x, half));
+        }
+        for _ in 0..count {
+            let x0 = self.rng.range(2.0, w - 2.0);
+            let (x, y, vertical, z) = match site {
+                Site::Soil => {
+                    // 土の断面の中（セミの幼虫は木の根の近く）
+                    let x = if stage == Stage::CicadaNymph && !self.trees.is_empty() { self.nearest_tree(x0) + self.rng.range(-0.8, 0.8) } else { x0 };
+                    let x = x.clamp(1.0, w - 1.0);
+                    (x, self.floor_at(x) + BAND + self.rng.range(0.3, 0.9), false, 1.0)
+                }
+                Site::Litter | Site::UnderStone => {
+                    let x = if site == Site::UnderStone && !self.rocks.is_empty() {
+                        let k = self.rng.below(self.rocks.len() as u32) as usize;
+                        self.rocks[k].x + self.rng.range(-0.3, 0.3)
+                    } else if !self.trees.is_empty() && self.rng.chance(0.6) {
+                        self.nearest_tree(x0) + self.rng.range(-0.7, 0.7)
+                    } else {
+                        x0
+                    };
+                    let x = x.clamp(1.0, w - 1.0);
+                    let z = self.rng.range(0.3, 0.9);
+                    (x, self.floor_at(x) + z * BAND - len * 0.1, false, z)
+                }
+                Site::DeadWood => {
+                    let k = self.rng.below(self.logs.len() as u32) as usize;
+                    let (lx, half) = self.logs[k];
+                    let x = lx + self.rng.range(-half * 0.6, half * 0.6);
+                    (x, self.floor_at(lx) + BAND * 0.5 - 0.3, false, 0.5)
+                }
+                Site::Stem | Site::Bark => {
+                    if site == Site::Bark && !self.trees.is_empty() {
+                        let k = self.rng.below(self.trees.len() as u32) as usize;
+                        let (tx, tw) = (self.trees[k].x, self.trees[k].w);
+                        let side = if self.rng.chance(0.5) { 1.0 } else { -1.0 };
+                        (tx + side * tw * 0.5, self.floor_at(tx) - self.rng.range(0.4, 2.2), true, 0.5)
+                    } else {
+                        let a = self.pick_anchor(sp, x0);
+                        let base = if self.has_water() { 0.0 } else { self.floor_at(a.0) + BAND * 0.5 };
+                        (a.0, (a.1 + 0.15).min(base - len * 0.3), false, 0.5)
+                    }
+                }
+                Site::Bank => {
+                    // 岸の草の根元（水のある場面では水面の草のかげ）
+                    let a = self.pick_anchor(sp, x0);
+                    let y = if self.has_water() { -0.04 } else { self.floor_at(a.0) + BAND * 0.5 - len * 0.1 };
+                    (a.0, y, false, 0.5)
+                }
+                Site::WaterBottom => {
+                    let z = self.rng.range(0.2, 0.9);
+                    (x0, self.floor_at(x0) + z * BAND * 0.4 - len * 0.12, false, z)
+                }
+                Site::Nest => unreachable!(),
+            };
+            let seed = self.rng.next_u32();
+            let facing = if vertical { if x > self.nearest_tree(x) { 1.0 } else { -1.0 } } else if self.rng.chance(0.5) { 1.0 } else { -1.0 };
+            self.creatures.push(Creature {
+                sp,
+                x,
+                y,
+                z,
+                vx: 0.0,
+                vy: 0.0,
+                facing,
+                pitch: if vertical { std::f32::consts::FRAC_PI_2 } else { 0.0 },
+                phase: self.rng.range(0.0, 100.0),
+                seed,
+                tx: x,
+                ty: y,
+                wait: 0.0,
+                flee: 0.0,
+                scale: self.rng.range(0.9, 1.1),
+                vertical,
+                anchor: (x, y, vertical),
+                airborne: false,
+                rest: None,
+                winter: Some((stage, site)),
+            });
+        }
     }
 
     /// 休んでいる虫を置く
@@ -511,6 +632,7 @@ impl Scene {
                 anchor: (x, y, vertical),
                 airborne: false,
                 rest: Some(rest),
+                winter: None,
             });
         }
     }
@@ -604,6 +726,8 @@ impl Scene {
         }
         let fl = self.floor_at(cx) + BAND * 0.45 - CAP_R;
         let fl = fl.min(self.floor_at(cx - 0.4) + BAND * 0.45 - CAP_R).min(self.floor_at(cx + 0.4) + BAND * 0.45 - CAP_R);
+        // 陸では、土の断面の中までもぐって、冬越しの虫を見られる
+        let fl = if self.has_water() { fl } else { self.floor_at(cx) + BAND + 1.2 };
         let c = &mut self.cap;
         if c.y > fl {
             c.y = fl;
@@ -625,7 +749,7 @@ impl Scene {
         let w = self.w;
         let water = self.has_water();
         for i in 0..self.creatures.len() {
-            if self.creatures[i].rest.is_some() {
+            if self.creatures[i].rest.is_some() || self.creatures[i].winter.is_some() {
                 // 休んでいる虫は、その場でじっとしている
                 self.creatures[i].phase += dt * 0.2;
                 continue;
@@ -834,7 +958,7 @@ impl Scene {
         let (vx0, vy0, vx1, vy1) = (v.x0(), v.y0(), v.x1(), v.y1());
         let (vw, vh) = (vx1 - vx0, vy1 - vy0);
         let (vcx, vcy) = (v.cx, v.cy);
-        let mut best: Vec<(usize, f32)> = Vec::new();
+        let mut best: Vec<(usize, f32, Option<Stage>)> = Vec::new();
         let blur = if self.cap_speed() > 1.0 { 0.85 } else { 1.0 };
         for cr in &self.creatures {
             let [bx0, by0, bx1, by1] = cr.bounds();
@@ -852,20 +976,28 @@ impl Scene {
             let dcy = ((cy - vcy) / (vh * 0.5)).abs();
             let center_pts = (1.0 - dcx.max(dcy)).max(0.0) * 25.0;
             // 葉・土・草にかくれている分、写りにくい
-            let hidden = match cr.rest {
-                Some(Rest::UnderLeaf | Rest::Litter | Rest::Hideout | Rest::Nest) => 0.8,
+            let hidden = match (cr.rest, cr.winter) {
+                (Some(Rest::UnderLeaf | Rest::Litter | Rest::Hideout | Rest::Nest), _) => 0.8,
+                (_, Some(_)) => 0.8,
                 _ => 1.0,
             };
             let inside = frac * 20.0 * hidden;
             let lit = self.light_at(cx, cy, light);
             let score = hidden * (size_pts + center_pts + inside) * (0.2 + 0.8 * lit.min(1.0).powf(0.7)) * blur;
+            let stage = cr.winter.map(|w| w.0);
             match best.iter_mut().find(|b| b.0 == cr.sp) {
-                Some(b) => b.1 = b.1.max(score),
-                None => best.push((cr.sp, score)),
+                Some(b) => {
+                    if score > b.1 {
+                        b.1 = score;
+                        b.2 = stage;
+                    }
+                }
+                None => best.push((cr.sp, score, stage)),
             }
         }
         best.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-        ShotResult { subjects: best }
+        let stages = best.iter().map(|b| b.2).collect();
+        ShotResult { subjects: best.into_iter().map(|b| (b.0, b.1)).collect(), stages }
     }
 
     /// カプセルの高さ・深さの説明
@@ -874,6 +1006,9 @@ impl Scene {
             tf!("水深 {:.0}cm", "{:.0} cm deep", "水深 {:.0}厘米", y * CM_PER_UNIT)
         } else {
             let ground = if self.has_water() { 0.0 } else { self.floor_at(self.cap.x) + BAND * 0.45 };
+            if !self.has_water() && y > ground {
+                return tf!("地面の下 {:.0}cm", "{:.0} cm underground", "地下 {:.0}厘米", (y - ground) * CM_PER_UNIT);
+            }
             tf!("地面から {:.0}cm", "{:.0} cm up", "离地 {:.0}厘米", ((ground - y) * CM_PER_UNIT).max(0.0))
         }
     }
@@ -895,6 +1030,7 @@ impl Scene {
         self.render_floor(g, x0, y0, x1, y1, units);
         self.render_plants(g, x0, x1, false);
         self.render_nests(g, x0, x1);
+        self.render_logs(g, x0, x1);
         // 虫 → カプセル → 手前の草
         let mut order: Vec<(f32, usize)> = self.creatures.iter().enumerate().filter(|(_, c)| c.x > x0 - 2.0 && c.x < x1 + 2.0).map(|(i, c)| (self.depth_key(c), i)).collect();
         order.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
@@ -1295,6 +1431,28 @@ impl Scene {
         }
     }
 
+    /// 朽ち木（中が見える切り口つき）
+    fn render_logs(&self, g: &mut Gfx, x0: f32, x1: f32) {
+        for &(lx, half) in &self.logs {
+            if lx + half < x0 - 1.0 || lx - half > x1 + 1.0 {
+                continue;
+            }
+            let cy = self.floor_at(lx) + BAND * 0.5 - 0.3;
+            let r = 0.34;
+            g.rect(lx - half, cy - r, lx + half, cy + r, [0.40, 0.30, 0.20, 1.0]);
+            g.circle(lx - half, cy, r, 16, [0.40, 0.30, 0.20, 1.0]);
+            g.circle(lx + half, cy, r, 16, [0.62, 0.50, 0.34, 1.0]);
+            g.circle(lx + half, cy, r * 0.7, 16, [0.70, 0.58, 0.40, 1.0]);
+            // くさって柔らかくなった中（切り口から見える）
+            g.rect(lx - half * 0.8, cy - r * 0.6, lx + half * 0.8, cy + r * 0.6, [0.58, 0.44, 0.28, 1.0]);
+            for k in 0..5 {
+                let x = lx - half * 0.7 + k as f32 * half * 0.35;
+                g.line((x, cy - r * 0.5), (x + 0.15, cy + r * 0.5), 0.02, [0.46, 0.34, 0.22, 0.8]);
+            }
+            g.circle(lx - half * 0.3, cy - r * 0.95, 0.08, 10, [0.30, 0.55, 0.30, 1.0]);
+        }
+    }
+
     /// 巣（地面の穴・木のうろ・巣箱・つり下がった巣）
     fn render_nests(&self, g: &mut Gfx, x0: f32, x1: f32) {
         for n in &self.nests {
@@ -1348,6 +1506,10 @@ impl Scene {
             if a > 0.01 {
                 g.circle(c.x, fy, len * 0.35, 12, [0.0, 0.0, 0.0, a]);
             }
+        }
+        if let Some((stage, site)) = c.winter {
+            self.render_wintering(g, c, stage, site);
+            return;
         }
         let activity = c.activity();
         let drawn = units.creature(g, c.sp, Pose { x, y, len, facing: c.facing, pitch: c.pitch, time: c.phase + (c.seed % 997) as f32 * 0.07, activity });
@@ -1403,6 +1565,48 @@ impl Scene {
             let glow = (c.phase * 2.4).sin().max(0.0);
             let k = if self.time == 3 { 0.9 } else if self.time == 2 { 0.55 } else { 0.35 };
             g.radial(x, y, len * if self.time == 3 { 2.4 } else { 1.4 }, 14, [0.85, 1.0, 0.45, k * glow], [0.85, 1.0, 0.45, 0.0]);
+        }
+    }
+
+    /// 冬越しの姿と、そのまわり（土の部屋・落ち葉・泥・石）
+    fn render_wintering(&self, g: &mut Gfx, c: &Creature, stage: Stage, site: Site) {
+        let len = c.len();
+        let (x, y) = (c.x, c.y);
+        let (gc, deep) = self.ground_cols();
+        if site == Site::Soil {
+            // 土の中の部屋
+            let n = 16;
+            let (rx, ry) = (len * 0.75, len * 0.5);
+            for k in 0..n {
+                let a0 = k as f32 / n as f32 * std::f32::consts::TAU;
+                let a1 = (k + 1) as f32 / n as f32 * std::f32::consts::TAU;
+                g.tri((x, y), (x + a0.cos() * rx, y + a0.sin() * ry), (x + a1.cos() * rx, y + a1.sin() * ry), c4(mix(deep, [0.0, 0.0, 0.0], 0.35), 1.0));
+            }
+            if stage == Stage::CicadaNymph {
+                g.line((x + len * 0.5, y - len * 0.3), (x + len * 1.4, y - len * 1.4), len * 0.06, [0.62, 0.50, 0.34, 1.0]);
+            }
+        }
+        art::draw_stage(g, c.sp, stage, x, y, len, c.facing, c.pitch, c.phase, 1.0, c.seed);
+        match site {
+            Site::Litter | Site::Bank => {
+                // 落ち葉をかぶっている
+                for k in 0..5 {
+                    let lx = x + (k as f32 - 2.0) * len * 0.3;
+                    let col = mix([0.66, 0.44, 0.20], [0.46, 0.32, 0.16], (k % 3) as f32 / 2.0);
+                    g.tri((lx - len * 0.25, y - len * 0.02), (lx + len * 0.25, y - len * 0.1), (lx, y + len * 0.12), c4(col, 1.0));
+                }
+            }
+            Site::WaterBottom => {
+                let mud = [0.30, 0.26, 0.18];
+                g.rect(x - len * 0.7, y + len * 0.1, x + len * 0.7, y + len * 0.3, c4(mud, 1.0));
+                g.tri((x - len * 0.7, y + len * 0.12), (x + len * 0.7, y + len * 0.12), (x, y - len * 0.02), c4(mud, 0.9));
+                let _ = gc;
+            }
+            Site::UnderStone => {
+                // 石を少し持ち上げたところ
+                g.circle(x + len * 0.25, y - len * 0.25, len * 0.45, 14, [0.52, 0.50, 0.46, 1.0]);
+            }
+            _ => {}
         }
     }
 
@@ -1490,10 +1694,10 @@ mod tests {
                 for _ in 0..400 {
                     sc.update(1.0 / 30.0, 0.6, 0.1, None, true);
                 }
-                assert!(sc.cap.y <= sc.floor_at(sc.cap.x) + BAND * 0.45 - CAP_R + 1e-3);
+                assert!(sc.cap.y <= sc.floor_at(sc.cap.x) + BAND + 1.2 + 1e-3);
                 for c in &sc.creatures {
                     assert!(c.x.is_finite() && c.y.is_finite(), "{}", SPECIES[c.sp].slug);
-                    assert!(c.y > sc.top() - 1.0 && c.y < sc.floor_at(c.x) + BAND + 0.5, "{} at {}", SPECIES[c.sp].slug, c.y);
+                    assert!(c.y > sc.top() - 1.0 && c.y < sc.floor_at(c.x) + BAND + 1.3, "{} at {}", SPECIES[c.sp].slug, c.y);
                 }
             }
         }
@@ -1504,10 +1708,14 @@ mod tests {
     fn no_time_of_day_is_empty() {
         for (s, spot) in SPOTS.iter().enumerate() {
             for &h in spot.habs {
-                for month in [5u8, 7, 9] {
+                for month in 1..=12u8 {
                     for time in 0..4u8 {
                         let sc = Scene::new(s, h, month, time, 3);
                         assert!(!sc.creatures.is_empty(), "{} {:?} month {} time {}", spot.name.0, h, month, time);
+                        for c in &sc.creatures {
+                            assert!(c.x.is_finite() && c.y.is_finite());
+                            assert_eq!(c.winter.is_some(), !SPECIES[c.sp].in_season(month));
+                        }
                         let any_month = Scene::new(s, h, month, 1, 3);
                         assert_eq!(sc.present, any_month.present, "time must not change who lives here");
                     }

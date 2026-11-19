@@ -183,6 +183,8 @@ struct PhotoCard {
     age: f32,
     index: usize,
     done_missions: Vec<usize>,
+    /// 冬越しの姿で写った虫（図鑑の項目, 姿）
+    stages: Vec<(usize, Stage)>,
 }
 
 pub struct Game {
@@ -1370,8 +1372,10 @@ impl Game {
         if m != self.prog.month {
             self.set_month(m);
         }
-        // 時間帯は変えない。活動しない時間なら、休んでいる場所を知らせる
-        if !SPECIES[i].active_at(self.prog.time) {
+        // 時間帯は変えない。成虫の季節でなければ冬越しの場所、活動しない時間なら休んでいる場所を知らせる
+        if let (false, Some((stage, site))) = (SPECIES[i].in_season(self.prog.month), SPECIES[i].winter()) {
+            self.notify_text(tf!("{}の{}は、{}で{}にいる（見つけにくい）", "In {1}, the {0} is a {2}, {3} (hard to spot)", "{1}的{0}以{2}的形态在{3}（不容易找到）", SPECIES[i].name.get(), month_name(self.prog.month), stage.name(), site.text()));
+        } else if !SPECIES[i].active_at(self.prog.time) {
             self.notify_text(tf!("{}の{}は、{}（見つけにくい）", "In the {1}, the {0} is {2} (hard to spot)", "{1}的{0}{2}（不容易找到）", SPECIES[i].name.get(), time_name(self.prog.time), SPECIES[i].rest().text()));
         }
         if self.cap_target.is_none() {
@@ -1413,14 +1417,18 @@ impl Game {
             return;
         }
         let mut found: Vec<(usize, f32)> = Vec::new();
+        let mut stages: Vec<(usize, Stage)> = Vec::new();
         let mut advice = None;
         match self.screen {
             Screen::Dive => {
                 let v = self.dive_view();
                 let Some(sc) = &self.scene else { return };
                 let r = sc.shoot(&v, self.prog.light);
-                for &(sp, s) in &r.subjects {
+                for (k, &(sp, s)) in r.subjects.iter().enumerate() {
                     found.push((sp, s));
+                    if let Some(Some(st)) = r.stages.get(k) {
+                        stages.push((sp, *st));
+                    }
                 }
                 let best = r.subjects.first().map_or(0.0, |b| b.1);
                 if r.subjects.is_empty() {
@@ -1461,7 +1469,7 @@ impl Game {
         if !lines.is_empty() || !done.is_empty() {
             self.autosave(true);
         }
-        self.photo = Some(PhotoCard { lines, advice, left: crate::reveal::HOLD_SECONDS, age: 0.0, index: 0, done_missions: done });
+        self.photo = Some(PhotoCard { lines, advice, left: crate::reveal::HOLD_SECONDS, age: 0.0, index: 0, done_missions: done, stages });
     }
 
     fn next_photo(&mut self) {
@@ -1862,7 +1870,12 @@ impl Game {
             let rest = tf!("{}は休み中：{}", "Resting in the {}: {}", "{}在休息：{}", time_name(time), SPECIES[e].rest().text());
             self.gfx.text(&rest, x0 + 12.0, y0 + 64.0, cw - 24.0, 32.0, Font::Small, GOLD);
         }
-        let (line, go) = if !SPECIES[e].in_season(month) {
+        if let (false, Some((stage, site))) = (SPECIES[e].in_season(month), SPECIES[e].winter()) {
+            let w = tf!("冬越し：{}で{}にいる", "Overwintering: {} {}", "越冬：以{}在{}", stage.name(), site.text());
+            self.gfx.text(&w, x0 + 12.0, y0 + 64.0, cw - 24.0, 32.0, Font::Small, GOLD);
+        }
+        let in_season_or_winter = SPECIES[e].in_season(month) || SPECIES[e].winter().is_some();
+        let (line, go) = if !in_season_or_winter {
             (tf!("{}にはいない。{}に見られる", "Not around in {}. Seen {}", "{}看不到。{}能看到", month_name(month), months_text(SPECIES[e].months)), Some(t!("その季節へ行く", "Go to its season", "前往那个季节")))
         } else if self.cap_target.is_some() {
             (t!("移動中…　着いたら降りよう（Enter）", "On the way… land when you arrive (Enter)", "移动中…　到达后降落（Enter）").to_string(), None)
@@ -2419,7 +2432,10 @@ impl Game {
                 let mut sections = crate::guide::sections(e, lang::lang());
                 let metadata = format!("{} / {}・{}\n{}: {}\n{}: {}\n{}: {}\n{}: {}\n\n",
                     sp.sci, sp.group.order(), sp.family.get(),
-                    t!("季節", "Season", "季节"), format!("{}　{}: {}\n{}: {}", months_text(sp.months), t!("時間帯", "Time", "时间段"), times_text(sp.times), t!("休むとき", "When resting", "休息时"), sp.rest().text()),
+                    t!("季節", "Season", "季节"), format!("{}　{}: {}\n{}: {}", months_text(sp.months), t!("時間帯", "Time", "时间段"), times_text(sp.times), t!("休むとき", "When resting", "休息时"), sp.rest().text()) + &match sp.winter() {
+                        Some((st, site)) => tf!("\n{}: {}で{}", "\n{}: as a {}, {}", "\n{}：以{}在{}", t!("冬越し", "Winter", "越冬"), st.name(), site.text()),
+                        None => tf!("\n{}: {}", "\n{}: {}", "\n{}：{}", t!("冬越し", "Winter", "越冬"), t!("関東では冬を越せず、毎年南から飛んでくる", "cannot survive Kanto winters; flies in from the south each year", "无法在关东越冬，每年从南方飞来")),
+                    },
                     t!("すみか", "Habitat", "栖息地"), hab_text(sp),
                     t!("会える場所", "Where", "地点"), place_text(e),
                     t!("大きさ", "Size", "大小"), size_text(sp.len_cm));
@@ -2444,6 +2460,7 @@ impl Game {
                 (t!("季節", "Season", "季节"), months_text(sp.months)),
                 (t!("時間帯", "Time", "时间段"), times_text(sp.times)),
                 (t!("休むとき", "When resting", "休息时"), sp.rest().text().to_string()),
+                (t!("冬越し", "Winter", "越冬"), match sp.winter() { Some((st, site)) => tf!("{}で{}", "as a {}, {}", "以{}在{}", st.name(), site.text()), None => t!("関東では冬を越せない", "cannot survive Kanto winters", "无法在关东越冬").to_string() }),
                 (t!("すみか", "Habitat", "栖息地"), hab_text(sp)),
                 (t!("会える場所", "Where", "地点"), place_text(e)),
             ] {
@@ -2712,7 +2729,12 @@ impl Game {
             self.gfx.text(&tf!("図鑑 No.{:02}","Guide No.{:02}","图鉴 No.{:02}",entry+1),
                 x0+14.0,y0+15.0,cw-90.0,20.0,Font::Normal,c);
             self.gfx.text(&format!("{} / {}",index+1,count),x1-68.0,y0+15.0,54.0,20.0,Font::NormalCenter,DIM);
-            self.gfx.text(entry_name(entry),x0+10.0,y1-111.0,cw-20.0,27.0,Font::BigCenter,TEXT);
+            let name = match p.stages.iter().find(|s| s.0 == entry) {
+                Some((_, Stage::Adult)) => tf!("{}（冬ごし中の成虫）", "{} (overwintering adult)", "{}（越冬的成虫）", entry_name(entry)),
+                Some((_, st)) => tf!("{}（{}）", "{} ({})", "{}（{}）", entry_name(entry), st.name()),
+                None => entry_name(entry).to_string(),
+            };
+            self.gfx.text(&name,x0+10.0,y1-111.0,cw-20.0,27.0,Font::BigCenter,TEXT);
             if entry<n_species() {
                 self.gfx.text(SPECIES[entry].sci,x0+10.0,y1-83.0,cw-20.0,18.0,Font::NormalCenter,DIM);
             }
@@ -2976,21 +2998,21 @@ mod tests {
     fn seasons_change_the_insects_and_are_saved() {
         let mut g = started();
         let kabuto = species_index("japanese-rhinoceros-beetle");
-        g.prog.month = 12;
+        g.prog.month = 8;
         g.goto(Target::Sp(kabuto));
-        assert!(SPECIES[kabuto].in_season(g.prog.month), "goto moves to the insect's season");
         for _ in 0..400 {
             g.update(0.1);
         }
         let h = g.pending_hab.unwrap();
         g.enter_dive(h);
-        assert!(g.scene.as_ref().unwrap().present.contains(&kabuto));
+        assert!(g.scene.as_ref().unwrap().creatures.iter().any(|c| c.sp == kabuto && c.winter.is_none()));
         g.do_act(Act::Month(1));
         assert_eq!(g.screen, Screen::Map, "changing the month returns to the map");
         g.enter_dive(h);
         let sc = g.scene.as_ref().unwrap();
-        assert!(!sc.present.contains(&kabuto));
-        assert!(sc.present.iter().all(|&i| SPECIES[i].in_season(1)));
+        // 1月のカブトムシは、幼虫で土の中
+        assert!(sc.creatures.iter().filter(|c| c.sp == kabuto).all(|c| c.winter == Some((Stage::Grub, Site::Soil))));
+        assert!(sc.creatures.iter().all(|c| c.winter.is_some() != SPECIES[c.sp].in_season(1)));
         g.do_act(Act::StepMonth(-1));
         assert_eq!(g.prog.month, 12);
         let saved = Progress::from_bytes(&g.prog.to_bytes()).unwrap();
@@ -3021,7 +3043,7 @@ mod tests {
         assert!(sc.present.contains(&kabuto));
         let resting: Vec<_> = sc.creatures.iter().filter(|c| c.sp == kabuto).collect();
         assert!(!resting.is_empty() && resting.iter().all(|c| c.rest == Some(Rest::Litter)));
-        assert!(sc.creatures.iter().all(|c| c.rest.is_some() != SPECIES[c.sp].active_at(1)));
+        assert!(sc.creatures.iter().filter(|c| c.winter.is_none()).all(|c| c.rest.is_some() != SPECIES[c.sp].active_at(1)));
         // 夜は暗く、ライトで明るくなる
         g.do_act(Act::TimeOfDay(3));
         g.enter_dive(h);
@@ -3043,6 +3065,7 @@ mod tests {
             let Some(t) = (0..4u8).find(|&t| !SPECIES[sp].active_at(t)) else { continue };
             g.close_photo();
             g.prog.time = t;
+            g.prog.month = SPECIES[sp].months.0;
             g.goto(Target::Sp(sp));
             for _ in 0..400 {
                 g.update(0.1);
@@ -3056,6 +3079,39 @@ mod tests {
             g.close_photo();
             g.do_act(Act::Surface);
         }
+    }
+
+    /// 成虫の季節でなくても、冬越しの姿で越冬場所に見つけて撮影できる
+    #[test]
+    fn every_insect_can_be_photographed_in_winter() {
+        let mut g = started();
+        let mut wintering = 0;
+        for sp in 0..n_species() {
+            g.close_photo();
+            g.prog.month = 1;
+            g.goto(Target::Sp(sp));
+            for _ in 0..400 {
+                g.update(0.1);
+            }
+            let h = g.pending_hab.unwrap();
+            g.enter_dive(h);
+            let sc = g.scene.as_ref().unwrap();
+            if SPECIES[sp].in_season(1) {
+                assert!(sc.creatures.iter().any(|c| c.sp == sp && c.winter.is_none()));
+            } else if SPECIES[sp].winter().is_some() {
+                assert_eq!(g.prog.month, 1, "{} should be found in January", SPECIES[sp].slug);
+                assert!(sc.creatures.iter().any(|c| c.sp == sp && c.winter.is_some()), "{} not wintering here", SPECIES[sp].slug);
+                wintering += 1;
+            } else {
+                assert_ne!(g.prog.month, 1, "{} cannot overwinter, so goto moves to its season", SPECIES[sp].slug);
+            }
+            frame_subject(&mut g, sp);
+            g.shoot();
+            assert_eq!(g.prog.stars[sp], 1, "could not photograph {} in winter", SPECIES[sp].slug);
+            g.close_photo();
+            g.do_act(Act::Surface);
+        }
+        assert!(wintering > 50);
     }
 
     #[test]

@@ -175,6 +175,106 @@ impl Rest {
     }
 }
 
+/// 成虫の季節でないときの姿（冬越しの姿）
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Stage {
+    /// たまご
+    Egg,
+    /// たまごのかたまり（カマキリの卵のう）
+    EggCase,
+    /// イモムシ・ケムシ（チョウ・ガの幼虫）
+    Caterpillar,
+    /// 丸まった白い幼虫（コガネムシ・クワガタ）
+    Grub,
+    /// まっすぐな白い幼虫（カミキリムシ・タマムシ）
+    Borer,
+    /// ヤゴ（トンボの幼虫）
+    Yago,
+    /// 土の中のセミの幼虫
+    CicadaNymph,
+    /// ホタルの幼虫（水の中）
+    FireflyLarva,
+    /// 小さなカメムシの幼虫
+    BugNymph,
+    /// チョウのさなぎ
+    Chrysalis,
+    /// ガのまゆ・土の中のさなぎ
+    Cocoon,
+    /// 成虫のまま冬眠
+    Adult,
+}
+
+impl Stage {
+    pub fn name(self) -> &'static str {
+        match self {
+            Stage::Egg => t!("たまご", "eggs", "卵"),
+            Stage::EggCase => t!("たまごのかたまり（卵のう）", "egg case", "卵鞘"),
+            Stage::Caterpillar | Stage::Grub | Stage::Borer | Stage::CicadaNymph | Stage::FireflyLarva | Stage::BugNymph => t!("幼虫", "larva", "幼虫"),
+            Stage::Yago => t!("幼虫（ヤゴ）", "nymph", "稚虫（水虿）"),
+            Stage::Chrysalis | Stage::Cocoon => t!("さなぎ", "pupa", "蛹"),
+            Stage::Adult => t!("成虫", "adult", "成虫"),
+        }
+    }
+    /// 成虫の絵の大きさに対する、絵の大きさ
+    pub fn scale(self) -> f32 {
+        match self {
+            Stage::Egg => 0.5,
+            Stage::EggCase | Stage::Chrysalis | Stage::Cocoon => 0.6,
+            Stage::BugNymph => 0.7,
+            Stage::Adult => 1.0,
+            _ => 0.85,
+        }
+    }
+}
+
+/// 冬越しの場所
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Site {
+    /// 土の中
+    Soil,
+    /// 落ち葉の下
+    Litter,
+    /// 朽ち木・枯れ木の中
+    DeadWood,
+    /// 草の茎・枝
+    Stem,
+    /// 木の幹・樹皮のすきま
+    Bark,
+    /// 水の底
+    WaterBottom,
+    /// 巣の中
+    Nest,
+    /// 石の下
+    UnderStone,
+    /// 水辺の岸（落ち葉や草の根元）
+    Bank,
+}
+
+impl Site {
+    pub fn text(self) -> &'static str {
+        match self {
+            Site::Soil => t!("土の中", "in the soil", "土里"),
+            Site::Litter => t!("落ち葉の下", "under fallen leaves", "落叶下"),
+            Site::DeadWood => t!("朽ち木・枯れ木の中", "inside rotting or dead wood", "朽木·枯木里"),
+            Site::Stem => t!("草の茎や枝", "on grass stems and twigs", "草茎和树枝上"),
+            Site::Bark => t!("木の幹や樹皮のすきま", "on tree trunks and in bark crevices", "树干和树皮缝隙里"),
+            Site::WaterBottom => t!("水の底", "at the bottom of the water", "水底"),
+            Site::Nest => t!("巣の中", "inside the nest", "巢里"),
+            Site::UnderStone => t!("石の下", "under stones", "石头下"),
+            Site::Bank => t!("水辺の岸の落ち葉や草の根元", "under leaves and plants on the bank", "岸边的落叶和草根下"),
+        }
+    }
+    /// その場面にこの場所があるか
+    pub fn fits(self, hab: Habitat) -> bool {
+        match self {
+            Site::WaterBottom => hab.is_water(),
+            Site::Soil | Site::Litter | Site::DeadWood | Site::UnderStone => !hab.is_water(),
+            Site::Bark => hab.has_trees(),
+            Site::Stem | Site::Nest | Site::Bank => true,
+        }
+    }
+}
+
 /// 時間帯 0=早朝 1=昼 2=夕方 3=夜（bit で組み合わせる）
 pub const DAWN: u8 = 1;
 pub const DAY: u8 = 2;
@@ -255,6 +355,47 @@ impl Species {
             Art::Bee(_) | Art::Ant => Rest::Nest,
             Art::Strider => Rest::WaterEdge,
         }
+    }
+
+    /// 成虫の季節でないときの姿と場所。None なら関東では冬を越せない（毎年南から飛んでくる）
+    pub fn winter(&self) -> Option<(Stage, Site)> {
+        use Site::*;
+        use Stage::*;
+        Some(match self.slug {
+            "cabbage-white" | "asian-swallowtail" | "old-world-swallowtail" | "spangle" => (Chrysalis, Bark),
+            "common-bluebottle" => (Chrysalis, Stem),
+            "eastern-pale-clouded-yellow" | "pale-grass-blue" | "small-copper" | "indian-fritillary" => (Caterpillar, Litter),
+            "great-purple-emperor" | "hestina-persimilis" => (Caterpillar, Litter),
+            "red-ring-skirt" => (Caterpillar, Bark),
+            "blue-admiral" => (Adult, Litter),
+            "chestnut-tiger" => (Caterpillar, Stem),
+            "japanese-luna-moth" => (Cocoon, Litter),
+            "winter-moth" => (Cocoon, Soil),
+            "autumn-darter" => (Egg, WaterBottom),
+            "wandering-glider" => return None,
+            "japanese-rhinoceros-beetle" | "kanabun" | "miyama-stag-beetle" => (Grub, Soil),
+            "saw-stag-beetle" => (Grub, DeadWood),
+            "dorcus-rectus" => (Adult, DeadWood),
+            "genji-firefly" | "heike-firefly" => (FireflyLarva, WaterBottom),
+            "chinese-diving-beetle" | "water-stick-insect" | "water-scorpion" | "giant-water-bug-appasus" => (Adult, WaterBottom),
+            "rosalia-batesi" | "white-spotted-longicorn" | "japanese-jewel-beetle" => (Borer, DeadWood),
+            "tiger-beetle" | "dor-beetle" => (Adult, Soil),
+            "pond-skater" => (Adult, Bank),
+            "striped-shield-bug" => (BugNymph, Litter),
+            "migratory-locust" | "oriental-longheaded-grasshopper" | "smaller-longheaded-grasshopper" | "emma-field-cricket" | "japanese-katydid" | "bell-cricket" => (Egg, Soil),
+            "chinese-mantis" | "giant-asian-mantis" => (EggCase, Stem),
+            "small-mantis" => (EggCase, UnderStone),
+            "stick-insect" => (Egg, Litter),
+            "western-honey-bee" | "japanese-honey-bee" | "carpenter-bee" | "japanese-carpenter-ant" => (Adult, Nest),
+            "asian-giant-hornet" | "yellow-hornet" => (Adult, DeadWood),
+            "maritime-earwig" => (Adult, UnderStone),
+            _ => match self.art {
+                Art::Cicada(_) => (CicadaNymph, Soil),
+                Art::Dragonfly(_) => (Yago, WaterBottom),
+                Art::Ladybug => (Adult, Litter),
+                _ => (Adult, Litter),
+            },
+        })
     }
 
     /// その時間帯（0〜3）に活動しているか
@@ -582,9 +723,10 @@ pub fn n_entries() -> usize {
 }
 
 /// その月に、そのスポットのその場面にいるか
-/// 活動していない時間帯でも、休んでいる場所にいる（見つけにくいだけ）
+/// その月に、そのスポットのその場面にいるか。
+/// 活動していない時間帯でも休んでいる場所に、成虫の季節でなければ冬越しの姿で越冬場所にいる
 pub fn lives_here(sp: &Species, spot: usize, hab: Habitat, month: u8) -> bool {
-    sp.in_season(month) && lives_at(sp, spot, hab)
+    lives_at(sp, spot, hab) && (sp.in_season(month) || sp.winter().map_or(false, |(_, site)| site.fits(hab)))
 }
 
 /// 季節を問わず、そのスポットのその場面にすむか
@@ -610,13 +752,16 @@ pub fn places_of(i: usize) -> Vec<(usize, Habitat)> {
 /// 場所は near（経緯度）からいちばん近いところ
 pub fn where_is(i: usize, near: (f32, f32), month: u8) -> (usize, Habitat, u8) {
     let sp = &SPECIES[i];
+    let somewhere = |m: u8| places_of(i).into_iter().any(|(s, h)| lives_here(sp, s, h, m));
+    // 冬越しの姿でもいれば月はそのまま。どこにもいなければ（南から来る虫）、いちばん近い成虫の月へ
     let month = (0..12u8)
         .flat_map(|d| [month as i32 + d as i32, month as i32 - d as i32])
         .map(|m| (m - 1).rem_euclid(12) as u8 + 1)
-        .find(|&m| sp.in_season(m))
+        .find(|&m| somewhere(m))
         .unwrap_or(month);
     let (s, h) = places_of(i)
         .into_iter()
+        .filter(|&(s, h)| lives_here(sp, s, h, month))
         .min_by(|a, b| {
             let da = km_dist(near, (SPOTS[a.0].lon, SPOTS[a.0].lat));
             let db = km_dist(near, (SPOTS[b.0].lon, SPOTS[b.0].lat));
@@ -666,7 +811,20 @@ mod tests {
         let moth = SPECIES.iter().find(|s| s.slug == "winter-moth").unwrap();
         assert!(moth.in_season(12) && moth.in_season(1) && !moth.in_season(7));
         let i = SPECIES.iter().position(|s| s.slug == "japanese-rhinoceros-beetle").unwrap();
-        assert_eq!(where_is(i, (139.7, 35.7), 12).2, 8);
+        // 12月のカブトムシは、幼虫で土の中にいる
+        let (s12, h12, m12) = where_is(i, (139.7, 35.7), 12);
+        assert_eq!(m12, 12);
+        assert!(!h12.is_water() && lives_here(&SPECIES[i], s12, h12, 12));
+        assert_eq!(SPECIES[i].winter(), Some((Stage::Grub, Site::Soil)));
+        // ウスバキトンボは関東で冬を越せないので、成虫の月へ
+        let g = SPECIES.iter().position(|s| s.slug == "wandering-glider").unwrap();
+        assert!(SPECIES[g].in_season(where_is(g, (139.7, 35.7), 1).2));
+        // 冬越しの場所が、どの虫にも少なくとも一つの場面にある
+        for (k, sp) in SPECIES.iter().enumerate() {
+            if sp.winter().is_some() {
+                assert!(places_of(k).iter().any(|&(s, h)| lives_here(sp, s, h, 1) || sp.in_season(1)), "{} has no winter site", sp.slug);
+            }
+        }
         assert_eq!(where_is(i, (139.7, 35.7), 7).2, 7);
         for t in 0..4u8 {
             assert!(SPECIES.iter().filter(|s| s.active_at(t) && s.in_season(7)).count() >= 8, "time {}", t);
