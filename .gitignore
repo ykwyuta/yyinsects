@@ -1,0 +1,6 @@
+/target
+/dist
+/output
+*.bmp
+.wrangler
+__pycache__/
