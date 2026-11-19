@@ -38,7 +38,7 @@ test('replay interrupts previous speech without appending stale guides', () => {
   narrator.say('guide', 'en-US');
   narrator.say('guide', 'en-US');
   assert.equal(played.length, 2);
-  assert.equal(cancels(), 3);
+  assert.equal(cancels(), 2);
 });
 test('turning off before interaction discards pending speech', () => {
   const { narrator, played } = setup();
@@ -53,7 +53,7 @@ test('stop cancels current speech and clears pending content', () => {
   narrator.say('guide', 'ja-JP');
   narrator.stop();
   narrator.unlock();
-  assert.equal(cancels(), 3);
+  assert.equal(cancels(), 2);
   assert.equal(played.length, 1);
 });
 test('unsupported speech is harmless', () => {
@@ -72,8 +72,8 @@ test('an early tap primes iOS speech before a guide exists', () => {
   const synth = {
     cancel() {}, getVoices: () => [],
     speak(u) {
-      if (inGesture) allowed = true;
-      if (allowed && u.text) heard.push(u.text);
+      if (inGesture && u.text.trim()) allowed = true;
+      if (allowed && u.volume !== 0) heard.push(u.text);
     },
   };
   const narrator = createNarrator(synth, Utterance);
@@ -89,25 +89,46 @@ test('silent initialization happens once and never interrupts later guides', () 
   narrator.unlock();
   narrator.unlock();
   assert.equal(primed.length, 1);
-  assert.equal(primed[0].text, '');
+  assert.ok(primed[0].text.trim());
   assert.equal(played.length, 0);
   narrator.say('guide', 'ja-JP');
   narrator.unlock();
   assert.equal(played.length, 1);
 });
 
-test('trusted touch release unlocks speech without relying on pointerdown', () => {
+test('trusted touch pointer release unlocks speech without a compatibility click', () => {
   const listeners = new Map();
   const { narrator, played } = setup();
   bindNarratorGestures({ addEventListener(type, fn) { listeners.set(type, fn); } }, narrator);
   assert.equal(listeners.has('pointerdown'), false);
   narrator.say('iPad guide', 'ja-JP');
-  listeners.get('touchend')({ isTrusted: false });
+  listeners.get('pointerup')({ type: 'pointerup', pointerType: 'touch', isTrusted: false });
+  listeners.get('pointerup')({ type: 'pointerup', pointerType: 'mouse', isTrusted: true });
   assert.equal(played.length, 0);
-  listeners.get('touchend')({ isTrusted: true });
+  listeners.get('pointerup')({ type: 'pointerup', pointerType: 'touch', isTrusted: true });
   assert.equal(played[0].text, 'iPad guide');
-  for (const type of ['mousedown', 'keydown', 'click']) {
+  for (const type of ['touchend', 'mousedown', 'keydown', 'click']) {
     listeners.get(type)({ isTrusted: true });
   }
   assert.equal(played.length, 1);
+});
+
+test('retries the latest guide on the next gesture if speech is denied', () => {
+  const { narrator, played } = setup();
+  narrator.unlock();
+  narrator.say('old guide', 'ja-JP');
+  played[0].onerror({ error: 'not-allowed' });
+  narrator.say('new guide', 'ja-JP');
+  assert.equal(played.length, 1);
+  narrator.unlock();
+  assert.equal(played[1].text, 'new guide');
+});
+
+test('a stale cancellation cannot reset speech access', () => {
+  const { narrator, played, primed } = setup();
+  narrator.unlock();
+  narrator.say('guide', 'ja-JP');
+  primed[0].onerror({ error: 'not-allowed' });
+  narrator.say('next guide', 'ja-JP');
+  assert.equal(played[1].text, 'next guide');
 });

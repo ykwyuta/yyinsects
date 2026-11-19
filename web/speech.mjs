@@ -10,7 +10,10 @@ export function createNarrator(synth, Utterance) {
     if (supported) synth.cancel();
   }
   function speak({ text, lang }, silent = false) {
-    synth.cancel();
+    if (current) {
+      current = null;
+      synth.cancel();
+    }
     const utterance = new Utterance(text);
     if (lang) utterance.lang = lang;
     utterance.rate = 0.85;
@@ -20,8 +23,16 @@ export function createNarrator(synth, Utterance) {
       utterance.voice = voices.find(v => v.lang.toLowerCase() === lang.toLowerCase())
         || voices.find(v => v.lang.split('-')[0] === lang.split('-')[0]) || null;
     }
-    utterance.onend = utterance.onerror = () => {
+    utterance.onend = () => {
       if (current === utterance) current = null;
+    };
+    utterance.onerror = (event) => {
+      if (current !== utterance) return;
+      current = null;
+      if (event.error === 'not-allowed') {
+        unlocked = false;
+        if (!silent) pending = { text, lang };
+      }
     };
     current = utterance;
     synth.speak(utterance);
@@ -42,7 +53,8 @@ export function createNarrator(synth, Utterance) {
       // including when the first tap happens while the game is still loading.
       unlocked = true;
       if (pending) play();
-      else speak({ text: '' }, true);
+      // WebKit can discard empty text before it enables speech for the page.
+      else speak({ text: '1' }, true);
     },
     say(text, lang) {
       if (!text) { stop(); return; }
@@ -54,11 +66,12 @@ export function createNarrator(synth, Utterance) {
 
 export function bindNarratorGestures(target, narrator) {
   const unlock = (event) => {
+    if (event.type === 'pointerup' && event.pointerType === 'mouse') return;
     if (event.isTrusted) narrator.unlock();
   };
   // Touch pointerdown is too early for Safari's user-gesture recognition.
   // Keep touchend for older iPads and click for keyboard/assistive activation.
-  for (const type of ['mousedown', 'touchend', 'keydown', 'click']) {
+  for (const type of ['mousedown', 'pointerup', 'touchend', 'keydown', 'click']) {
     target.addEventListener(type, unlock, { capture: true, passive: true });
   }
 }
