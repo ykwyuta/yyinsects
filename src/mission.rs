@@ -194,6 +194,26 @@ pub static MISSIONS: &[Mission] = &[
         done: L("タマムシの色は色素ではなく、細かい構造が光を反射してできる「構造色」です。", "The jewel beetle's colour comes not from pigment but from tiny structures that reflect light.", "吉丁虫的颜色不是色素，而是细微结构反射光线形成的“结构色”。"),
         targets: &["japanese-jewel-beetle", "tiger-beetle", "japanese-luna-moth"],
     },
+    Mission {
+        title: L("春の訪れ", "Signs of spring", "春天来了"),
+        brief: L(
+            "春になると、冬をこした虫やさなぎからかえった虫が動き出します。モンシロチョウ・ベニシジミ・キムネクマバチを撮影しましょう。地図の上の月を春に合わせてね。",
+            "In spring, insects that survived the winter come out. Photograph a small white, a small copper and a carpenter bee. Set the month on the map to spring.",
+            "春天到了，越冬的昆虫开始活动。请拍摄菜粉蝶、红灰蝶和黄胸木蜂。记得把地图上的月份调到春天。",
+        ),
+        done: L("春の虫は、花がさきはじめるのに合わせて現れます。", "Spring insects appear just as the flowers begin to bloom.", "春天的昆虫会配合花开的时间出现。"),
+        targets: &["cabbage-white", "small-copper", "carpenter-bee"],
+    },
+    Mission {
+        title: L("冬の虫さがし", "Winter insect hunt", "寻找冬天的昆虫"),
+        brief: L(
+            "冬は虫が少ない季節ですが、いないわけではありません。冬に飛ぶシロオビフユシャクと、集まって冬をこすナミテントウ・ナナホシテントウを探しましょう。",
+            "Winter has few insects, but not none. Find the Japanese winter moth that flies in winter, and the Asian and seven-spot lady beetles that gather to overwinter.",
+            "冬天虫子很少，但并不是没有。请寻找在冬天飞行的白带冬尺蛾，以及聚在一起越冬的异色瓢虫和七星瓢虫。",
+        ),
+        done: L("虫たちは、たまご・幼虫・さなぎ・成虫など、種類ごとにちがう姿で冬をこします。", "Each kind of insect gets through winter in its own stage: egg, larva, pupa or adult.", "每种昆虫以不同的形态越冬：卵、幼虫、蛹或成虫。"),
+        targets: &["winter-moth", "harlequin-ladybird", "seven-spot-ladybird"],
+    },
 ];
 
 /// 宿題に合格したか
@@ -212,6 +232,8 @@ mod tests {
             for &(t, _) in &m.target_list() {
                 assert!(!places_of(t.entry()).is_empty());
             }
+            // 宿題の虫が、そろって見られる月がある
+            assert!((1..=12u8).any(|mo| m.target_list().iter().all(|(t, _)| SPECIES[t.entry()].in_season(mo))), "{}", m.title.0);
         }
     }
 }

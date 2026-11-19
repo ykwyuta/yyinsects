@@ -146,7 +146,7 @@ mod tests {
         // 表示言語のグローバル設定に依存せず、日本語の実データを検査する。
         let mut texts = Vec::new();
         for s in crate::life::SPECIES {
-            texts.extend([s.name.0, s.family.0, s.season.0, s.desc.0, s.fact.0]);
+            texts.extend([s.name.0, s.family.0, s.desc.0, s.fact.0]);
         }
         for m in crate::mission::MISSIONS {
             texts.extend([m.title.0, m.brief.0, m.done.0]);

@@ -111,6 +111,8 @@ pub struct Capsule {
 pub struct Scene {
     pub hab: Habitat,
     pub spot: usize,
+    /// 月（1〜12）
+    pub month: u8,
     pub w: f32,
     /// 地面（水のある場面は水底。帯の奥の縁）の y
     floor: Vec<f32>,
@@ -179,7 +181,7 @@ pub fn stars_of(score: f32) -> u8 {
 }
 
 impl Scene {
-    pub fn new(spot: usize, hab: Habitat, seed: u32) -> Scene {
+    pub fn new(spot: usize, hab: Habitat, month: u8, seed: u32) -> Scene {
         let mut rng = Rng::new(seed as u64 ^ 0x9e37_79b9);
         let w = 30.0;
         let n = (w / FSTEP) as usize + 2;
@@ -202,6 +204,7 @@ impl Scene {
         let mut s = Scene {
             hab,
             spot,
+            month,
             w,
             floor,
             creatures: Vec::new(),
@@ -267,7 +270,17 @@ impl Scene {
                 4 => 0.0,
                 _ => rng.range(0.25, if hab == Habitat::Meadow { 1.3 } else { 0.7 }),
             };
-            let col = if kind == 1 { flower_cols[rng.below(flower_cols.len() as u32) as usize] } else { mix([0.30, 0.55, 0.22], [0.50, 0.66, 0.28], rng.f32()) };
+            let season = season_of(month);
+            // 冬は花がなく、秋は花が少ない
+            let kind = if kind == 1 && (season == 3 || season == 2 && rng.chance(0.5)) { 0 } else { kind };
+            let grass = match season {
+                0 => mix([0.42, 0.66, 0.26], [0.58, 0.76, 0.32], rng.f32()),
+                2 => mix([0.56, 0.58, 0.26], [0.70, 0.62, 0.30], rng.f32()),
+                3 => mix([0.62, 0.54, 0.36], [0.72, 0.64, 0.44], rng.f32()),
+                _ => mix([0.30, 0.55, 0.22], [0.50, 0.66, 0.28], rng.f32()),
+            };
+            let h = if season == 3 && kind == 0 { h * 0.5 } else { h };
+            let col = if kind == 1 { flower_cols[rng.below(flower_cols.len() as u32) as usize] } else { grass };
             s.plants.push(Plant { x, z: rng.range(0.0, 1.0), h, kind, col });
         }
         s.plants.sort_by(|a, b| a.z.partial_cmp(&b.z).unwrap());
@@ -287,7 +300,7 @@ impl Scene {
         }
         // 虫
         for (i, sp) in SPECIES.iter().enumerate() {
-            if !lives_here(sp, spot, hab) {
+            if !lives_here(sp, spot, hab, month) {
                 continue;
             }
             s.present.push(i);
@@ -403,9 +416,11 @@ impl Scene {
 
     /// 明るさ（0〜1）。森の中は木かげで暗く、水の中は少し暗い
     pub fn ambient_at(&self, y: f32) -> f32 {
+        let winter = season_of(self.month) == 3;
         let base = match self.hab {
-            Habitat::Forest => 0.5,
-            Habitat::Mountain => 0.6,
+            Habitat::Forest if !winter => 0.5,
+            Habitat::Mountain if !winter => 0.6,
+            Habitat::Forest | Habitat::Mountain => 0.85,
             _ => 1.0,
         };
         if self.has_water() && y > 0.0 {
@@ -773,7 +788,15 @@ impl Scene {
         }
     }
 
+    /// 雪が積もっているか（冬の山・日光）
+    pub fn snowy(&self) -> bool {
+        matches!(self.month, 12 | 1 | 2 | 3) && (self.hab == Habitat::Mountain || self.spot == S_NIKKO && !self.has_water())
+    }
+
     fn sky_cols(&self) -> ([f32; 3], [f32; 3]) {
+        if season_of(self.month) == 3 {
+            return ([0.46, 0.60, 0.80], [0.84, 0.88, 0.92]);
+        }
         match self.hab {
             Habitat::Forest | Habitat::Mountain => ([0.40, 0.58, 0.72], [0.74, 0.84, 0.80]),
             Habitat::Shore => ([0.30, 0.56, 0.88], [0.80, 0.90, 0.96]),
@@ -782,6 +805,16 @@ impl Scene {
     }
 
     fn ground_cols(&self) -> ([f32; 3], [f32; 3]) {
+        if self.snowy() {
+            return ([0.94, 0.96, 0.98], [0.70, 0.74, 0.80]);
+        }
+        let season = season_of(self.month);
+        if season == 3 && matches!(self.hab, Habitat::Meadow | Habitat::Park) {
+            return ([0.58, 0.52, 0.34], [0.36, 0.28, 0.18]);
+        }
+        if season == 2 && self.hab == Habitat::Meadow {
+            return ([0.56, 0.56, 0.28], [0.34, 0.28, 0.16]);
+        }
         match self.hab {
             Habitat::Forest => ([0.40, 0.32, 0.20], [0.26, 0.20, 0.14]),
             Habitat::Mountain => ([0.36, 0.32, 0.24], [0.24, 0.20, 0.16]),
@@ -791,6 +824,23 @@ impl Scene {
             Habitat::Paddy => ([0.40, 0.34, 0.24], [0.26, 0.22, 0.16]),
             Habitat::Pond => ([0.34, 0.32, 0.22], [0.20, 0.18, 0.14]),
             Habitat::River => ([0.56, 0.54, 0.48], [0.36, 0.34, 0.30]),
+        }
+    }
+
+    /// 木の葉の色（冬で葉が落ちていれば None）。春の公園はサクラ、秋は紅葉
+    fn leaf_col(&self, tone: f32) -> Option<[f32; 3]> {
+        let green = if self.hab == Habitat::Mountain { [0.18, 0.40, 0.22] } else { [0.24, 0.48, 0.22] };
+        match self.month {
+            12 | 1 | 2 => {
+                // 神社の森や公園の常緑樹は冬も緑
+                if self.hab == Habitat::Park || tone > 0.6 && self.hab == Habitat::Forest { Some(mix(green, [0.1, 0.2, 0.1], 0.3)) } else { None }
+            }
+            3 | 4 => {
+                if self.hab == Habitat::Park && tone > 0.3 { Some([0.98, 0.80, 0.86]) } else { Some(mix(green, [0.6, 0.8, 0.4], 0.45)) }
+            }
+            10 | 11 => Some(mix([0.90, 0.48, 0.16], [0.95, 0.78, 0.22], tone)),
+            9 => Some(mix(green, [0.80, 0.62, 0.20], 0.25)),
+            _ => Some(green),
         }
     }
 
@@ -907,21 +957,37 @@ impl Scene {
                 g.line((tr.x + hw * 0.3, sy), (tr.x + hw * 0.3, sy + 0.25), 0.04, [0.50, 0.30, 0.12, 0.8]);
             }
             // 枝と葉（上の方）
-            let leaf = if self.hab == Habitat::Mountain { [0.18, 0.40, 0.22] } else { [0.24, 0.48, 0.22] };
+            let leaf = self.leaf_col(tr.tone);
+            if leaf.is_none() {
+                // 冬：葉の落ちた枝
+                let top = top + 3.0;
+                for i in 0..6 {
+                    let a = (i as f32 - 2.5) * 0.45 + tr.tone;
+                    let (bx, by) = (tr.x + a.sin() * 1.6, top - a.cos().abs() * 1.4);
+                    g.line((tr.x, top + 0.8), (bx, by), 0.05, c4(mix(bark, [0.0, 0.0, 0.0], 0.15), 1.0));
+                    g.line((bx, by), (bx + a.sin() * 0.5, by - 0.5), 0.025, c4(bark, 1.0));
+                }
+                if self.snowy() {
+                    g.rect(tr.x - hw, top + 0.6, tr.x + hw, top + 0.75, [0.96, 0.97, 1.0, 1.0]);
+                }
+                continue;
+            }
+            let leaf = leaf.unwrap();
             for i in 0..7 {
                 let a = i as f32 * 1.7 + tr.tone * 3.0;
                 let lx = tr.x + a.sin() * 1.5;
-                let ly = top + 1.0 + (i % 3) as f32 * 0.7;
+                let ly = top + 2.4 + (i % 3) as f32 * 0.7;
                 g.circle(lx, ly, 1.1 + (i % 2) as f32 * 0.4, 16, c4(mix(leaf, [0.5, 0.7, 0.3], (i % 3) as f32 * 0.2), 0.95));
             }
         }
-        // 森の上は木の葉でおおわれる
-        if matches!(self.hab, Habitat::Forest | Habitat::Mountain) {
+        // 森の上は木の葉でおおわれる（冬は枝のすきまから空が見える）
+        if let (Some(canopy), true) = (self.leaf_col(0.3), matches!(self.hab, Habitat::Forest | Habitat::Mountain)) {
+            let canopy = mix(canopy, [0.0, 0.0, 0.0], 0.15);
             let top = self.top() - 1.0;
             let mut x = (x0 / 0.8).floor() * 0.8;
             while x < x1 + 1.0 {
                 let h = crate::rng::hash2((x * 10.0) as i32, 1, self.seed);
-                g.circle(x, top + h * 0.6, 0.9 + h * 0.5, 14, [0.20, 0.40, 0.20, 0.95]);
+                g.circle(x, top + h * 0.6, 0.9 + h * 0.5, 14, c4(canopy, 0.95));
                 x += 0.8;
             }
         }
@@ -1015,10 +1081,20 @@ impl Scene {
                     }
                 }
                 3 => {
-                    // イネ（水の中から立つ）
+                    // イネ（水の中から立つ）。春は小さな苗、秋は黄金色の穂、冬は切り株
+                    let (hk, col) = match self.month {
+                        4 | 5 => (0.35, [0.50, 0.78, 0.36]),
+                        9 | 10 => (1.0, [0.86, 0.72, 0.28]),
+                        11 | 12 | 1 | 2 | 3 => (0.12, [0.66, 0.56, 0.36]),
+                        _ => (1.0, mix(p.col, [0.6, 0.7, 0.3], 0.3)),
+                    };
+                    let hh = (p.h + 0.4) * hk;
                     for k in 0..4 {
                         let dx = (k as f32 - 1.5) * 0.04;
-                        g.line((p.x + dx, base), (p.x + dx * 2.5 + sway, base - p.h - 0.4), 0.025, c4(mix(p.col, [0.6, 0.7, 0.3], 0.3), 1.0));
+                        g.line((p.x + dx, base), (p.x + dx * 2.5 + sway * hk, base - hh), 0.025, c4(col, 1.0));
+                    }
+                    if matches!(self.month, 9 | 10) {
+                        g.circle(p.x + 0.1 + sway, base - hh + 0.08, 0.06, 8, [0.92, 0.80, 0.36, 1.0]);
                     }
                 }
                 2 => {
@@ -1107,7 +1183,15 @@ impl Scene {
             let px = x0 + ((m.x * 97.0 + x0 * 0.3 * m.z).rem_euclid(1.0)) * vw;
             let py = y0 + ((m.y + y0 * 0.01 * m.z).rem_euclid(1.0)) * vh;
             let s = 0.015 * m.s * (0.5 + m.z) * (vw / 16.0).clamp(0.4, 2.0);
-            g.circle(px, py, s, 6, [1.0, 0.98, 0.85, 0.35 * m.z]);
+            if self.snowy() {
+                g.circle(px, py, s * 2.2, 8, [1.0, 1.0, 1.0, 0.8 * m.z]);
+            } else if matches!(self.month, 10 | 11) && matches!(self.hab, Habitat::Forest | Habitat::Mountain | Habitat::Park) && m.s > 1.1 {
+                let c = mix([0.90, 0.40, 0.12], [0.95, 0.78, 0.20], m.z);
+                let r = s * 3.0;
+                g.tri((px - r, py), (px, py - r * 0.6), (px + r, py), c4(c, 0.9));
+            } else {
+                g.circle(px, py, s, 6, [1.0, 0.98, 0.85, 0.35 * m.z]);
+            }
         }
         // 木かげの暗さ（ライトのまわりは明るい）
         let cy = (y0 + y1) * 0.5;
@@ -1143,8 +1227,8 @@ mod tests {
     fn every_scene_runs_and_keeps_insects_in_bounds() {
         for (s, spot) in SPOTS.iter().enumerate() {
             for &h in spot.habs {
-                let mut sc = Scene::new(s, h, 7 + s as u32);
-                assert!(!sc.present.is_empty());
+                let mut sc = Scene::new(s, h, [7, 1, 4, 10][s % 4], 7 + s as u32);
+                assert!(!sc.present.is_empty() || sc.month == 1);
                 for _ in 0..400 {
                     sc.update(1.0 / 30.0, 0.6, 0.1, None, true);
                 }
@@ -1159,7 +1243,7 @@ mod tests {
 
     #[test]
     fn photo_scores_close_subject_higher() {
-        let s = Scene::new(S_SHOWA, Habitat::Meadow, 11);
+        let s = Scene::new(S_SHOWA, Habitat::Meadow, 7, 11);
         let c = &s.creatures[0];
         let (x, y) = c.center();
         let near = View { cx: x, cy: y, ppm: 1600.0, w: 1600.0, h: 900.0 };

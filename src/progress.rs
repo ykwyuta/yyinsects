@@ -4,7 +4,8 @@ use crate::mission::{mission_done, MISSIONS};
 use crate::save::{RResult, Reader, Writer};
 
 const MAGIC: &[u8; 4] = b"YYI1";
-const VERSION: u32 = 1;
+/// 2：いまの月を記録する版
+const VERSION: u32 = 2;
 
 #[derive(Clone)]
 pub struct Progress {
@@ -17,6 +18,8 @@ pub struct Progress {
     /// カプセルの場所（経緯度）
     pub lon: f32,
     pub lat: f32,
+    /// いまの月（1〜12）
+    pub month: u8,
     pub photos: u32,
     pub intro_done: bool,
     pub light: bool,
@@ -25,7 +28,7 @@ pub struct Progress {
 impl Progress {
     pub fn new() -> Progress {
         let s = &crate::earth::SPOTS[crate::earth::S_SHOWA];
-        Progress { stars: vec![0; n_entries()], fresh: vec![false; n_entries()], mission: 0, lon: s.lon, lat: s.lat, photos: 0, intro_done: false, light: false }
+        Progress { stars: vec![0; n_entries()], fresh: vec![false; n_entries()], mission: 0, lon: s.lon, lat: s.lat, month: 7, photos: 0, intro_done: false, light: false }
     }
 
     pub fn found(&self) -> usize {
@@ -103,6 +106,7 @@ impl Progress {
         w.usize(self.mission);
         w.f32(self.lon);
         w.f32(self.lat);
+        w.u8(self.month);
         w.u32(self.photos);
         w.bool(self.intro_done);
         w.bool(self.light);
@@ -132,6 +136,9 @@ impl Progress {
         p.mission = r.usize()?.min(MISSIONS.len() - 1);
         p.lon = r.f32()?.clamp(-180.0, 180.0);
         p.lat = r.f32()?.clamp(-80.0, 80.0);
+        if v >= 2 {
+            p.month = r.u8()?.clamp(1, 12);
+        }
         p.photos = r.u32()?;
         p.intro_done = r.bool()?;
         p.light = r.bool()?;
@@ -147,7 +154,7 @@ impl Progress {
     /// 記録の見出し
     pub fn meta(&self) -> String {
         let m = if self.all_clear() { t!("全課題クリア", "All clear", "全部完成").to_string() } else { tf!("宿題 {}/{}合格", "Tasks {}/{}", "作业 {}/{}合格", self.done_count(), MISSIONS.len()) };
-        tf!("{}・図鑑 {}/{}", "{} · Guide {}/{}", "{}·图鉴 {}/{}", m, self.found(), n_entries())
+        tf!("{}月・{}・図鑑 {}/{}", "Month {} · {} · Guide {}/{}", "{}月·{}·图鉴 {}/{}", self.month, m, self.found(), n_entries())
     }
 }
 
@@ -162,6 +169,7 @@ mod tests {
         p.record(n_entries() - 1, 1);
         p.lon = 139.5;
         p.lat = 35.25;
+        p.month = 12;
         p.photos = 42;
         p.intro_done = true;
         let b = p.to_bytes();
@@ -169,6 +177,7 @@ mod tests {
         assert_eq!(q.stars, p.stars);
         assert_eq!(q.fresh, p.fresh);
         assert_eq!(q.lon, 139.5);
+        assert_eq!(q.month, 12);
         assert_eq!(q.photos, 42);
         assert!(q.intro_done);
         assert!(Progress::from_bytes(&b[..b.len() - 3]).is_err());
