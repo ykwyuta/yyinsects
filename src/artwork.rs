@@ -119,12 +119,23 @@ pub fn draw(gfx: &mut Gfx, texture: &Texture, [x0, y0, x1, y1]: [f32; 4], alpha:
 mod tests {
     use super::*;
 
-    /// 置いてある画像はすべて読める（無いものは手描きで代わりに描くので、無くてもよい）
+    /// 置いてある画像はすべて読める
     #[test]
     fn embedded_artwork_decodes() {
         for (slug, bytes) in ARTWORK {
             let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg).expect(slug);
             assert!(image.width() >= 512 && image.height() >= 480, "{}", slug);
+        }
+    }
+
+    #[test]
+    fn field_guide_has_artwork_for_every_collectible() {
+        for (e, species) in crate::life::SPECIES.iter().enumerate() {
+            assert!(find(species.slug).is_some(), "missing artwork for {}", species.slug);
+            if crate::mission::has_stage(e) {
+                let slug = format!("winter-{}", species.slug);
+                assert!(find(&slug).is_some(), "missing artwork for {slug}");
+            }
         }
     }
 

@@ -2351,6 +2351,10 @@ impl Game {
     /// 冬越しの姿の絵を枠の中に描く
     fn draw_stage_art(&mut self, e: usize, x0: f32, y0: f32, x1: f32, y1: f32, a: f32) {
         let Some((stage, _)) = SPECIES[e].winter() else { return };
+        let slug = format!("winter-{}", entry_slug(e));
+        if self.artwork.draw(&mut self.gfx, &slug, [x0, y0, x1, y1], a, Fit::Contain) {
+            return;
+        }
         let (ew, eh) = art::stage_extent(e, stage);
         let len = ((x1 - x0) * 0.8 / ew).min((y1 - y0) * 0.8 / eh);
         art::draw_stage(&mut self.gfx, e, stage, (x0 + x1) * 0.5, (y0 + y1) * 0.5, len, 1.0, 0.0, self.clock, a, 7);
@@ -2464,8 +2468,13 @@ impl Game {
         let st = self.prog.stars[e];
         let found = st > 0;
         let top = self.top_h();
-        if found && crate::artwork::find(entry_slug(e)).is_none() {
-            self.gfx.text(t!("イラスト（大きさは実物とちがいます）", "Illustration (not to scale)", "插图（大小与实物不同）"), 30.0, y1 - 43.0, split - 50.0, 20.0, Font::NormalCenter, DIM);
+        if found {
+            let caption = if crate::artwork::find(entry_slug(e)).is_some() {
+                t!("AI生成画像（大きさは実物とちがいます）", "AI-generated image (not to scale)", "AI生成图像（大小与实物不同）")
+            } else {
+                t!("イラスト（大きさは実物とちがいます）", "Illustration (not to scale)", "插图（大小与实物不同）")
+            };
+            self.gfx.text(caption, 30.0, y1 - 43.0, split - 50.0, 20.0, Font::NormalCenter, DIM);
         }
         self.gfx.text(&tf!("図鑑 No.{:02}　{}", "Guide No.{:02}  {}", "图鉴 No.{:02}　{}", e + 1, entry_group(e).name()), 24.0, top + 14.0, 420.0, 24.0, Font::Big, DIM);
         // 冬越しの姿の枠の見出しと、探しに行くボタン
