@@ -1,0 +1,67 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --release --lib
+
+      - name: Test WebAssembly packaging
+        run: node --test tools/package_wasm.test.mjs
+
+      - name: Test voice guide
+        run: node --test tools/speech.test.mjs
+
+      - name: Test touch input
+        run: node --test tools/touch.test.mjs
+
+      - name: Audit Japanese compound readings
+        run: python3 tools/audit_readings.py --check
+
+      - name: Build (WebAssembly)
+        run: bash build.sh
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: yyinsects-web
+          path: dist
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked --bin yyinsects-win
+
+      - name: Test
+        # Windows 版の描画・記録の層を含めて単体テストを通す
+        run: cargo test --release --locked --lib
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: yyinsects-windows
+          path: |
+            target/release/yyinsects-win.exe
+            target/release/yyinsects_win.pdb
+            README.md

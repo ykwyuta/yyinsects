@@ -1,0 +1,12 @@
+{
+  "name": "yyinsects",
+  "private": true,
+  "version": "0.1.0",
+  "description": "昆虫図鑑 — ミクロ観察カプセルで虫をさがせ（Rust → WebAssembly のブラウザ版）",
+  "scripts": {
+    "build": "bash build.sh",
+    "test:voice": "node --test tools/speech.test.mjs",
+    "test:touch": "node --test tools/touch.test.mjs",
+    "deploy": "bash build.sh && npx wrangler deploy"
+  }
+}
