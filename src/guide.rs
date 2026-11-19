@@ -85,7 +85,9 @@ pub fn sections(e: usize, language: Lang) -> Vec<Section> {
                         life::Site::WaterBottom => ja("水の底"),
                         life::Site::Nest => ja("巣の中"),
                         life::Site::UnderStone => ja("石の下"),
-                        life::Site::Bank => ja("水辺の岸の落ち葉や草の根元"),
+                        life::Site::Bank => ja("水辺の岸の石や倒木の下・落ち葉の下"),
+                        life::Site::InTrunk => ja("生きた木の幹の中"),
+                        life::Site::LeafUnder => ja("冬も葉の落ちない木の葉の裏"),
                     };
                     format!("{}で、{}{}", st, si, ja("ですごす。成虫が見られない季節も、そこをさがせば見つかる"))
                 }

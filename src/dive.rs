@@ -491,8 +491,8 @@ impl Scene {
                     let x = lx + self.rng.range(-half * 0.6, half * 0.6);
                     (x, self.floor_at(lx) + BAND * 0.5 - 0.3, false, 0.5)
                 }
-                Site::Stem | Site::Bark => {
-                    if site == Site::Bark && !self.trees.is_empty() {
+                Site::Stem | Site::Bark | Site::InTrunk | Site::LeafUnder => {
+                    if matches!(site, Site::Bark | Site::InTrunk) && !self.trees.is_empty() {
                         let k = self.rng.below(self.trees.len() as u32) as usize;
                         let (tx, tw) = (self.trees[k].x, self.trees[k].w);
                         let side = if self.rng.chance(0.5) { 1.0 } else { -1.0 };
@@ -1601,6 +1601,21 @@ impl Scene {
                 g.rect(x - len * 0.7, y + len * 0.1, x + len * 0.7, y + len * 0.3, c4(mud, 1.0));
                 g.tri((x - len * 0.7, y + len * 0.12), (x + len * 0.7, y + len * 0.12), (x, y - len * 0.02), c4(mud, 0.9));
                 let _ = gc;
+            }
+            Site::InTrunk => {
+                // 幹の中：樹皮の穴から見える
+                let bark = [0.30, 0.22, 0.16, 0.9];
+                g.rect(x - len * 0.35, y - len * 0.75, x + len * 0.35, y - len * 0.45, bark);
+                g.rect(x - len * 0.35, y + len * 0.45, x + len * 0.35, y + len * 0.75, bark);
+            }
+            Site::LeafUnder => {
+                let leaf = [0.16, 0.36, 0.18, 0.97];
+                let (lx, ly) = (x, y - len * 0.35);
+                for k in 0..14 {
+                    let a0 = k as f32 / 14.0 * std::f32::consts::TAU;
+                    let a1 = (k + 1) as f32 / 14.0 * std::f32::consts::TAU;
+                    g.tri((lx, ly), (lx + a0.cos() * len * 0.7, ly + a0.sin() * len * 0.28), (lx + a1.cos() * len * 0.7, ly + a1.sin() * len * 0.28), leaf);
+                }
             }
             Site::UnderStone => {
                 // 石を少し持ち上げたところ

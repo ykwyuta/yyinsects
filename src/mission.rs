@@ -284,7 +284,8 @@ mod tests {
             }
             // 宿題の虫が、そろって見られる月がある
             assert!((1..=12u8).any(|mo| m.target_list().iter().all(|&(t, _)| match t {
-                Target::Sp(i) => SPECIES[i].in_season(mo),
+                // 成虫で冬を越す虫は、冬も成虫として撮れる
+                Target::Sp(i) => SPECIES[i].in_season(mo) || matches!(SPECIES[i].winter(), Some((crate::life::Stage::Adult, _))),
                 Target::Stage(i) => !SPECIES[i].in_season(mo),
             })), "{}", m.title.0);
         }

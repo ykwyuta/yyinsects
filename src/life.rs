@@ -248,6 +248,10 @@ pub enum Site {
     UnderStone,
     /// 水辺の岸（落ち葉や草の根元）
     Bank,
+    /// 生きた木の幹の中
+    InTrunk,
+    /// 冬も落ちない葉の裏
+    LeafUnder,
 }
 
 impl Site {
@@ -261,7 +265,9 @@ impl Site {
             Site::WaterBottom => t!("水の底", "at the bottom of the water", "水底"),
             Site::Nest => t!("巣の中", "inside the nest", "巢里"),
             Site::UnderStone => t!("石の下", "under stones", "石头下"),
-            Site::Bank => t!("水辺の岸の落ち葉や草の根元", "under leaves and plants on the bank", "岸边的落叶和草根下"),
+            Site::Bank => t!("水辺の岸の石や倒木の下・落ち葉の下", "under stones, logs and leaves on the bank", "岸边的石头、倒木和落叶下"),
+            Site::InTrunk => t!("生きた木の幹の中", "inside the trunk of a living tree", "活树的树干里"),
+            Site::LeafUnder => t!("冬も葉の落ちない木の葉の裏", "under the leaves of evergreen plants", "常绿植物的叶子背面"),
         }
     }
     /// その場面にこの場所があるか
@@ -269,7 +275,8 @@ impl Site {
         match self {
             Site::WaterBottom => hab.is_water(),
             Site::Soil | Site::Litter | Site::DeadWood | Site::UnderStone => !hab.is_water(),
-            Site::Bark => hab.has_trees(),
+            Site::Bark | Site::InTrunk => hab.has_trees(),
+            Site::LeafUnder => true,
             Site::Stem | Site::Nest | Site::Bank => true,
         }
     }
@@ -343,7 +350,7 @@ impl Species {
 
     /// 活動しない時間帯に休んでいる場所
     pub fn rest(&self) -> Rest {
-        if self.slug == "winter-moth" {
+        if self.slug == "winter-moth" || self.slug == "japanese-luna-moth" {
             return Rest::Trunk;
         }
         match self.art {
@@ -367,28 +374,34 @@ impl Species {
             "eastern-pale-clouded-yellow" | "pale-grass-blue" | "small-copper" | "indian-fritillary" => (Caterpillar, Litter),
             "great-purple-emperor" | "hestina-persimilis" => (Caterpillar, Litter),
             "red-ring-skirt" => (Caterpillar, Bark),
-            "blue-admiral" => (Adult, Litter),
-            "chestnut-tiger" => (Caterpillar, Stem),
+            "blue-admiral" => (Adult, UnderStone),
+            "chestnut-tiger" => (Caterpillar, LeafUnder),
             "japanese-luna-moth" => (Cocoon, Litter),
             "winter-moth" => (Cocoon, Soil),
             "autumn-darter" => (Egg, WaterBottom),
             "wandering-glider" => return None,
-            "japanese-rhinoceros-beetle" | "kanabun" | "miyama-stag-beetle" => (Grub, Soil),
-            "saw-stag-beetle" => (Grub, DeadWood),
+            "japanese-rhinoceros-beetle" | "miyama-stag-beetle" | "saw-stag-beetle" => (Grub, Soil),
+            "kanabun" => (Grub, DeadWood),
             "dorcus-rectus" => (Adult, DeadWood),
             "genji-firefly" | "heike-firefly" => (FireflyLarva, WaterBottom),
-            "chinese-diving-beetle" | "water-stick-insect" | "water-scorpion" | "giant-water-bug-appasus" => (Adult, WaterBottom),
-            "rosalia-batesi" | "white-spotted-longicorn" | "japanese-jewel-beetle" => (Borer, DeadWood),
-            "tiger-beetle" | "dor-beetle" => (Adult, Soil),
+            "chinese-diving-beetle" | "water-stick-insect" | "water-scorpion" => (Adult, WaterBottom),
+            "giant-water-bug-appasus" => (Adult, Bank),
+            "rosalia-batesi" | "japanese-jewel-beetle" => (Borer, DeadWood),
+            "white-spotted-longicorn" => (Borer, InTrunk),
+            "tiger-beetle" => (Adult, Soil),
+            "dor-beetle" => (Adult, Litter),
             "pond-skater" => (Adult, Bank),
-            "striped-shield-bug" => (BugNymph, Litter),
+            "striped-shield-bug" => (Adult, Litter),
             "migratory-locust" | "oriental-longheaded-grasshopper" | "smaller-longheaded-grasshopper" | "emma-field-cricket" | "japanese-katydid" | "bell-cricket" => (Egg, Soil),
-            "chinese-mantis" | "giant-asian-mantis" => (EggCase, Stem),
+            "chinese-mantis" => (EggCase, Stem),
+            "giant-asian-mantis" => (EggCase, Bark),
             "small-mantis" => (EggCase, UnderStone),
             "stick-insect" => (Egg, Litter),
             "western-honey-bee" | "japanese-honey-bee" | "carpenter-bee" | "japanese-carpenter-ant" => (Adult, Nest),
             "asian-giant-hornet" | "yellow-hornet" => (Adult, DeadWood),
             "maritime-earwig" => (Adult, UnderStone),
+            "harlequin-ladybird" => (Adult, Bark),
+            "seven-spot-ladybird" => (Adult, Litter),
             _ => match self.art {
                 Art::Cicada(_) => (CicadaNymph, Soil),
                 Art::Dragonfly(_) => (Yago, WaterBottom),
@@ -556,11 +569,11 @@ pub static SPECIES: &[Species] = &[
         L("金属のようにかがやく茶色や緑の甲虫。樹液に頭をつっこんでなめている。", "A metallic brown or green beetle that buries its head in tree sap.", "闪着金属光泽的褐色或绿色甲虫，把头钻进树液里舔食。"),
         L("前ばねを閉じたまま、すき間から後ろばねを出して飛べる。", "It can fly with its wing cases closed, sliding the hindwings out from the sides.", "能在不打开前翅的情况下，从缝隙伸出后翅飞行。")),
     sp("seven-spot-ladybird", L("ナナホシテントウ", "Seven-spot ladybird", "七星瓢虫"), "Coccinella septempunctata", GBeetle, L("テントウムシ科", "Coccinellidae", "瓢虫科"), 0.8, MEADOW | PARK, &[],
-        Crawl, Art::Ladybug, [0.90, 0.16, 0.10], [0.06, 0.06, 0.06], 3.0, 0.5, 0.06, (1, 12), DAWN | DAY,
+        Crawl, Art::Ladybug, [0.90, 0.16, 0.10], [0.06, 0.06, 0.06], 3.0, 0.5, 0.06, (3, 11), DAWN | DAY,
         L("赤い背中に7つの黒い点があるテントウムシ。草の上でアブラムシを食べる。", "A ladybird with seven black spots on a red back, eating aphids on plants.", "红色背上有七个黑点的瓢虫，在草上吃蚜虫。"),
         L("草の先まで登ると、そこから飛び立つくせがある。", "It climbs to the tip of a stem before taking off.", "有爬到草尖再飞起来的习惯。")),
     sp("harlequin-ladybird", L("ナミテントウ", "Asian lady beetle", "异色瓢虫"), "Harmonia axyridis", GBeetle, L("テントウムシ科", "Coccinellidae", "瓢虫科"), 0.7, PARK | FOREST, &[],
-        Crawl, Art::Ladybug, [0.95, 0.55, 0.12], [0.08, 0.06, 0.06], 3.0, 0.5, 0.06, (1, 12), DAWN | DAY,
+        Crawl, Art::Ladybug, [0.95, 0.55, 0.12], [0.08, 0.06, 0.06], 3.0, 0.5, 0.06, (3, 11), DAWN | DAY,
         L("模様がとても多いテントウムシ。黒地に赤い点のもの、オレンジに黒い点のものなどがいる。", "A ladybird of many patterns: red spots on black, black spots on orange and more.", "花纹非常多样的瓢虫，有黑底红点的，也有橙底黑点的。"),
         L("模様のちがいは親から子へ受けつがれる遺伝のしくみで決まる。", "Its pattern is inherited from its parents.", "花纹的不同由从亲代传给子代的遗传机制决定。")),
     sp("genji-firefly", L("ゲンジボタル", "Genji firefly", "源氏萤"), "Luciola cruciata", GBeetle, L("ホタル科", "Lampyridae", "萤科"), 1.5, RIVER, &[S_TAKAO, S_RANZAN, S_YORO, S_NAGATORO, S_SAYAMA],
@@ -826,7 +839,7 @@ mod tests {
     #[test]
     fn every_month_has_insects_and_seasons_wrap() {
         for m in 1..=12u8 {
-            assert!(SPECIES.iter().filter(|s| s.in_season(m)).count() >= 3, "month {}", m);
+            assert!(SPECIES.iter().filter(|s| s.in_season(m) || matches!(s.winter(), Some((Stage::Adult, _)))).count() >= 3, "month {}", m);
         }
         let moth = SPECIES.iter().find(|s| s.slug == "winter-moth").unwrap();
         assert!(moth.in_season(12) && moth.in_season(1) && !moth.in_season(7));
