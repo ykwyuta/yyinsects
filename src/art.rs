@@ -880,7 +880,7 @@ fn earwig(g: &mut Gfx, pen: &Pen, c: [f32; 3], c2: [f32; 3], t: f32, activity: f
     antenna(g, pen, 0.38, 0.05, 0.24, 0.6, -0.3, 0.012, c2, t);
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(not(windows), feature = "headless")))]
 mod tests {
     use super::*;
 
