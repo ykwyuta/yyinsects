@@ -56,7 +56,7 @@ Cloudflare への公開は YYEarth と同じ（`bash build.sh && npx wrangler de
 
 図鑑の各項目には、学名・なかま（目・科）・季節・すみか・会える場所・大きさと、紹介・豆知識、日本語版では「なかまの体とくらし」「観察のコツ」「関東で会うには」の読みものがあります。すみか・季節・大きさはゲーム用のおおよそのものです（季節は月単位、時間帯は4つに分けたもので、地域や年によるずれは考えていません）。
 
-図鑑と撮影結果には、AIで生成した写真風の画像を使っています。画像は `assets/artwork/<slug>.jpg`（成虫）と `assets/artwork/winter-<slug>.jpg`（たまご・幼虫・さなぎ）にあり、ビルド時に組み込まれます。第2弾で加えた66種（キタキチョウ〜ウスバカゲロウ）にはまだ画像がなく、図鑑でも `src/art.rs` の手描きの絵で表示します。画像を置けば自動で使われます。
+図鑑と撮影結果には、全132種の成虫と、別に集める冬越しの姿のすべてに、AIで生成した写真風の画像を使っています。画像は `assets/artwork/<slug>.jpg`（成虫）と `assets/artwork/winter-<slug>.jpg`（たまご・幼虫・さなぎ）にあり、ビルド時に組み込まれます。
 
 観察中の虫は `src/art.rs` で描いています。`assets/units/<slug>.png`（観察用スプライト）や `assets/artwork/backdrop-<場面>.jpg`（遠景。forest・mountain・meadow・park・pond・river・paddy・shore）を置いてビルドし直すと、手描きの代わりに使われます。カプセル・石・地面の模様・トキ先生の画像は YYEarth のものを使っています。
 
