@@ -244,6 +244,66 @@ pub static MISSIONS: &[Mission] = &[
         done: L("同じ虫でも、時期によって姿もすむ場所もまったくちがいます。", "The same insect can look and live completely differently at different times of year.", "同一种昆虫在不同时期，样子和栖息地完全不同。"),
         targets: &["japanese-rhinoceros-beetle@stage", "chinese-mantis@stage", "cabbage-white@stage"],
     },
+    Mission {
+        title: L("秋の夜の鳴く虫", "Autumn night singers", "秋夜的鸣虫"),
+        brief: L(
+            "夏の終わりから秋の夜、草むらではいろいろな虫が鳴いています。クツワムシ、カンタン、マツムシを見つけましょう。夕方か夜に、草はらやクズのしげみをさがしてね。",
+            "From late summer into autumn, many insects sing in the grass at night. Find a kutsuwamushi katydid, a tree cricket and a pine cricket. Search grassland and kudzu thickets in the evening or at night.",
+            "从夏末到秋天的夜晚，草丛里有许多虫在鸣叫。请找到纺织娘、长瓣树蟋和松蛉蟋。傍晚或夜里去草地和葛藤丛中找找吧。",
+        ),
+        done: L("鳴き声は、オスがメスをよぶための合図です。", "Their songs are signals males use to call females.", "鸣声是雄虫呼唤雌虫的信号。"),
+        targets: &["kutsuwamushi", "tree-cricket", "pine-cricket"],
+    },
+    Mission {
+        title: L("赤とんぼくらべ", "Red dragonfly comparison", "红蜻蜓比一比"),
+        brief: L(
+            "赤とんぼはアキアカネだけではありません。ナツアカネ、ノシメトンボ、マユタテアカネを見つけて、くらべてみましょう。夏から秋の田んぼや池のまわりにいます。",
+            "The autumn darter is not the only red dragonfly. Find a summer darter, a ribbon darter and an eroticum darter and compare them. They live around paddies and ponds from summer to autumn.",
+            "红蜻蜓不只有秋赤蜻。请找到夏赤蜻、褐顶赤蜻和眉斑赤蜻比一比。它们从夏天到秋天生活在稻田和池塘周围。",
+        ),
+        done: L("はねの先の色や顔のもようで、見分けられます。", "You can tell them apart by their wingtips and face markings.", "可以通过翅尖的颜色和脸上的花纹来区分。"),
+        targets: &["summer-darter", "ribbon-darter", "eroticum-darter"],
+    },
+    Mission {
+        title: L("セミの声をたどって", "Following cicada songs", "循着蝉鸣"),
+        brief: L(
+            "セミは種類によって、鳴く季節も場所もちがいます。クマゼミ、エゾゼミ、チッチゼミを見つけましょう。街の公園と、すずしい山をさがしてね。",
+            "Each kind of cicada sings in its own season and place. Find a bear cicada, an Ezo cicada and a chicchi cicada. Search city parks and cool mountains.",
+            "不同种类的蝉，鸣叫的季节和地点都不同。请找到黑蚱蝉、虾夷蝉和小蝉。去城市公园和凉爽的山里找找吧。",
+        ),
+        done: L("鳴き声を聞き分けられると、すがたが見えなくても名前がわかります。", "Once you know their songs, you can name them without seeing them.", "只要能分辨鸣声，看不见也能知道名字。"),
+        targets: &["bear-cicada", "ezo-cicada", "chicchi-cicada"],
+    },
+    Mission {
+        title: L("成虫で冬をこす虫", "Adults through the winter", "以成虫越冬的虫"),
+        brief: L(
+            "多くの虫はたまごや幼虫で冬を越しますが、成虫のまま冬を越す虫もいます。キタテハ、ツチイナゴ、ホソミオツネントンボを見つけましょう。",
+            "Most insects spend winter as eggs or larvae, but some survive as adults. Find an Asian comma, a Japanese grasshopper and a winter damselfly.",
+            "许多昆虫以卵或幼虫越冬，但也有以成虫越冬的。请找到黄钩蛱蝶、日本黄脊蝗和三叶黄丝蟌。",
+        ),
+        done: L("成虫で冬を越すと、春いちばんに動き出せます。", "Overwintering as adults lets them get going first thing in spring.", "以成虫越冬，春天就能最早开始活动。"),
+        targets: &["asian-comma", "japanese-grasshopper", "winter-damselfly"],
+    },
+    Mission {
+        title: L("アシナガバチとスズメバチ", "Paper wasps and hornets", "长脚胡蜂与胡蜂"),
+        brief: L(
+            "ハチの巣は種類によって形も場所もちがいます。セグロアシナガバチ、コガタスズメバチ、クロスズメバチを見つけましょう。巣には近づきすぎないでね。",
+            "Each kind of wasp builds a different nest in a different place. Find a Japanese paper wasp, a lesser hornet and a black yellowjacket. Don't get too close to their nests.",
+            "不同种类的蜂，巢的形状和位置都不同。请找到日本长脚胡蜂、黄边胡蜂和黑胡蜂。不要太靠近它们的巢哦。",
+        ),
+        done: L("こわいハチも、ほかの虫を食べて自然のバランスを守っています。", "Even fearsome wasps help keep nature in balance by eating other insects.", "可怕的胡蜂也通过捕食其他昆虫维持自然平衡。"),
+        targets: &["paper-wasp", "lesser-hornet", "black-hornet"],
+    },
+    Mission {
+        title: L("田んぼと池の小さな虫", "Small insects of paddies and ponds", "稻田和池塘的小虫"),
+        brief: L(
+            "田んぼや池には、水の上や中でくらす小さな虫がたくさんいます。ミズスマシ、マツモムシ、コバネイナゴを見つけましょう。",
+            "Paddies and ponds are full of small insects living on and in the water. Find a whirligig beetle, a backswimmer and a rice grasshopper.",
+            "稻田和池塘里有许多在水上和水中生活的小虫。请找到豉甲、松藻虫和小翅稻蝗。",
+        ),
+        done: L("水辺は、いろいろな虫が集まる大切な場所です。", "Watersides are important places where many insects gather.", "水边是许多昆虫聚集的重要地方。"),
+        targets: &["whirligig-beetle", "backswimmer", "rice-grasshopper"],
+    },
 ];
 
 /// 冬越しの姿の名前（「カブトムシの幼虫」）
